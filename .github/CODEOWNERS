@@ -1,0 +1,19 @@
+# Radar Team
+
+/src/radar/               @YOUR-ORG/radar
+/tests/radar/             @YOUR-ORG/radar
+/requirements/radar/      @YOUR-ORG/radar
+
+
+# Tower Team
+
+/src/tower/               @YOUR-ORG/tower
+/tests/tower/             @YOUR-ORG/tower
+/requirements/tower/      @YOUR-ORG/tower
+
+
+# Command Team
+
+/src/command/             @YOUR-ORG/command
+/tests/command/            @YOUR-ORG/command
+/requirements/command/     @YOUR-ORG/command

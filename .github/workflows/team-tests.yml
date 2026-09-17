@@ -1,0 +1,128 @@
+name: Team Tests
+
+on:
+  workflow_call:
+    inputs:
+      subsystem:
+        description: "ATC subsystem to test"
+        required: true
+        type: string
+
+jobs:
+  tests:
+    name: ${{ inputs.subsystem }} Tests
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # --------------------------------------------------
+      # Detect languages used by this subsystem
+      # --------------------------------------------------
+
+      - name: Detect languages
+        id: detect
+        shell: bash
+        run: |
+
+          javascript=false
+          python=false
+
+          if find \
+              "src/${{ inputs.subsystem }}" \
+              "tests/${{ inputs.subsystem }}" \
+              -type f \
+              \( -name "*.ts" \
+                 -o -name "*.tsx" \
+                 -o -name "*.js" \
+                 -o -name "*.jsx" \) \
+              | grep -q .; then
+            javascript=true
+          fi
+
+          if find \
+              "src/${{ inputs.subsystem }}" \
+              "tests/${{ inputs.subsystem }}" \
+              -type f \
+              -name "*.py" \
+              | grep -q .; then
+            python=true
+          fi
+
+          echo "javascript=$javascript" >> "$GITHUB_OUTPUT"
+          echo "python=$python" >> "$GITHUB_OUTPUT"
+
+          echo "JavaScript/TypeScript detected: $javascript"
+          echo "Python detected: $python"
+
+      # --------------------------------------------------
+      # TypeScript / JavaScript
+      # --------------------------------------------------
+
+      - name: Set up Node.js
+        if: steps.detect.outputs.javascript == 'true'
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install Node dependencies
+        if: steps.detect.outputs.javascript == 'true'
+        run: npm ci
+
+      - name: Run TypeScript / JavaScript tests
+        if: steps.detect.outputs.javascript == 'true'
+        run: npm test -- --runInBand tests/${{ inputs.subsystem }}
+
+      # --------------------------------------------------
+      # Python / pytest
+      # --------------------------------------------------
+
+      - name: Set up Python
+        if: steps.detect.outputs.python == 'true'
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python dependencies
+        if: steps.detect.outputs.python == 'true'
+        run: |
+
+          python -m pip install --upgrade pip
+
+          if [ -f requirements.txt ]; then
+            pip install -r requirements.txt
+          fi
+
+          if [ -f pyproject.toml ]; then
+            pip install .
+          fi
+
+          pip install pytest
+
+      - name: Run pytest
+        if: steps.detect.outputs.python == 'true'
+        run: pytest tests/${{ inputs.subsystem }}
+
+      # --------------------------------------------------
+      # Make sure the subsystem contains supported code
+      # --------------------------------------------------
+
+      - name: Verify test language
+        shell: bash
+        run: |
+
+          javascript="${{ steps.detect.outputs.javascript }}"
+          python="${{ steps.detect.outputs.python }}"
+
+          if [ "$javascript" = "false" ] && [ "$python" = "false" ]; then
+            echo "ERROR: No supported source language detected."
+            echo ""
+            echo "Expected TypeScript/JavaScript or Python source"
+            echo "under src/${{ inputs.subsystem }}/"
+            exit 1
+          fi
+
+          echo "Supported test language detected."

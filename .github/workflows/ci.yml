@@ -1,0 +1,166 @@
+name: ATC CI
+
+on:
+  push:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "requirements/**"
+
+  pull_request:
+    paths:
+      - "src/**"
+      - "tests/**"
+      - "requirements/**"
+
+jobs:
+
+  # ============================================================
+  # Detect which ATC subsystems changed
+  # ============================================================
+
+  changes:
+    name: Detect Changes
+    runs-on: ubuntu-latest
+
+    permissions:
+      contents: read
+      pull-requests: read
+
+    outputs:
+      radar: ${{ steps.filter.outputs.radar }}
+      tower: ${{ steps.filter.outputs.tower }}
+      command: ${{ steps.filter.outputs.command }}
+
+    steps:
+
+      - name: Detect subsystem changes
+        id: filter
+        uses: dorny/paths-filter@v4
+        with:
+          filters: |
+
+            radar:
+              - "src/radar/**"
+              - "tests/radar/**"
+              - "requirements/radar/**"
+
+            tower:
+              - "src/tower/**"
+              - "tests/tower/**"
+              - "requirements/tower/**"
+
+            command:
+              - "src/command/**"
+              - "tests/command/**"
+              - "requirements/command/**"
+
+
+  # ============================================================
+  # Radar Team
+  # ============================================================
+
+  radar:
+    name: Radar
+    needs: changes
+
+    if: needs.changes.outputs.radar == 'true'
+
+    uses: ./.github/workflows/team-tests.yml
+
+    with:
+      subsystem: radar
+
+
+  # ============================================================
+  # Tower Team
+  # ============================================================
+
+  tower:
+    name: Tower
+    needs: changes
+
+    if: needs.changes.outputs.tower == 'true'
+
+    uses: ./.github/workflows/team-tests.yml
+
+    with:
+      subsystem: tower
+
+
+  # ============================================================
+  # Command Team
+  # ============================================================
+
+  command:
+    name: Command
+    needs: changes
+
+    if: needs.changes.outputs.command == 'true'
+
+    uses: ./.github/workflows/team-tests.yml
+
+    with:
+      subsystem: command
+
+
+  # ============================================================
+  # FINAL MERGE GATE
+  #
+  # This is the status check that should be required
+  # by the GitHub branch protection rule.
+  # ============================================================
+
+  validate-requirements:
+    name: Validate Requirements
+
+    needs:
+      - changes
+      - radar
+      - tower
+      - command
+
+    if: |
+      always() &&
+      needs.changes.result == 'success' &&
+      (
+        needs.radar.result == 'success' ||
+        needs.radar.result == 'skipped'
+      ) &&
+      (
+        needs.tower.result == 'success' ||
+        needs.tower.result == 'skipped'
+      ) &&
+      (
+        needs.command.result == 'success' ||
+        needs.command.result == 'skipped'
+      )
+
+    runs-on: ubuntu-latest
+
+    steps:
+
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Make validator executable
+        run: chmod +x scripts/validate-requirements.sh
+
+      # --------------------------------------------------
+      # Validate only the affected subsystems
+      # --------------------------------------------------
+
+      - name: Validate Radar requirements
+        if: needs.changes.outputs.radar == 'true'
+        run: ./scripts/validate-requirements.sh radar
+
+      - name: Validate Tower requirements
+        if: needs.changes.outputs.tower == 'true'
+        run: ./scripts/validate-requirements.sh tower
+
+      - name: Validate Command requirements
+        if: needs.changes.outputs.command == 'true'
+        run: ./scripts/validate-requirements.sh command
+
+      - name: Validation complete
+        run: echo "All affected subsystem requirements are valid."
