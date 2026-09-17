@@ -15,5 +15,5 @@
 # Command Team
 
 /src/command/             @Skynet-CSC456/command
-/tests/command/            @Skynet-CSC456/command
-/requirements/command/     @Skynet-CSC456/command
+/tests/command/           @Skynet-CSC456/command
+/requirements/command/    @Skynet-CSC456/command
