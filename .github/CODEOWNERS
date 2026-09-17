@@ -1,19 +1,19 @@
 # Radar Team
 
-/src/radar/               @Skynet-CSC456/Team Radar
-/tests/radar/             @Skynet-CSC456/Team Radar
-/requirements/radar/      @Skynet-CSC456/Team Radar
+/src/radar/               @Skynet-CSC456/Team-Radar
+/tests/radar/             @Skynet-CSC456/Team-Radar
+/requirements/radar/      @Skynet-CSC456/Team-Radar
 
 
 # Tower Team
 
-/src/tower/               @Skynet-CSC456/Team Tower
-/tests/tower/             @Skynet-CSC456/Team Tower
-/requirements/tower/      @Skynet-CSC456/Team Tower
+/src/tower/               @Skynet-CSC456/Team-Tower
+/tests/tower/             @Skynet-CSC456/Team-Tower
+/requirements/tower/      @Skynet-CSC456/Team-Tower
 
 
 # Command Team
 
-/src/command/             @Skynet-CSC456/Team Command
-/tests/command/           @Skynet-CSC456/Team Command
-/requirements/command/    @Skynet-CSC456/Team Command
+/src/command/             @Skynet-CSC456/Team-Command
+/tests/command/           @Skynet-CSC456/Team-Command
+/requirements/command/    @Skynet-CSC456/Team-Command
