@@ -40,3 +40,7 @@ db.close()
 
 `create_database()` creates the database file, the `teams` table, and the
 `messages` table, and registers the Radar, Tower, and Command teams.
+
+## Next plan
+
+Write the REST API endpoints using the `src/db.py` database functions (e.g. `send_message`, `receive_messages`) so the API accesses the database properly instead of duplicating logic.
