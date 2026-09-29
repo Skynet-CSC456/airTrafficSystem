@@ -173,7 +173,7 @@ while IFS= read -r -d '' requirement_file; do
         echo "    FAIL: No automated test references $req_id"
         errors=$((errors + 1))
     fi
-done < <(find "$REQUIREMENTS_DIR" -type f -name '*.md' -print0)
+done < <(find "$REQUIREMENTS_DIR" -type f -name 'REQ-*.md' -print0)
 
 if [[ $requirements_checked -eq 0 ]]; then
     echo ""
