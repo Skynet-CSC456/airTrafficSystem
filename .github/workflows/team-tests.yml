@@ -104,7 +104,7 @@ jobs:
 
       - name: Run pytest
         if: steps.detect.outputs.python == 'true'
-        run: pytest tests/${{ inputs.subsystem }}
+        run: python -m pytest tests/${{ inputs.subsystem }}
 
       # --------------------------------------------------
       # Make sure the subsystem contains supported code
