@@ -1,1 +1,1 @@
-REQ-CMD-AA1-check The check shall return true.
+REQ-CMD-AA1-availability The availability check shall return true.
