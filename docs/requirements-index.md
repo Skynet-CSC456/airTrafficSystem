@@ -5,6 +5,12 @@
 | REQ-TWR-002 | Tower | Receive messages addressed to Tower | src/tower/messaging.py:receive_messages | tests/tower/test_messaging.py (REQ-TWR-002) | N/A |
 | REQ-TWR-003 | Tower | Check aircraft clearance | src/tower/clearance.py | tests/tower/test_clearance.py | N/A |
 | REQ-CMD-001 | Command | Command and control flow | TBD | TBD | TBD |
+<<<<<<< Updated upstream
 | REQ-COM-002 | Command | Command availability check | src/command/availability.py | tests/command/test_availability.py | N/A |
 | REQ-RAD-002 | Radar | Radar availability | src/radar/availability.py | tests/radar/test_availability.py | N/A |
 | REQ-RAD-003 | Radar | Radar updates aircraft position data every 5 seconds | src/radar/position_update.py | tests/radar/test_position_update.py | TBD |
+=======
+| REQ-RAD-JJ1 | Radar | Aircraft position updates | TBD | TBD | TBD |
+| REQ-RAD-002 | Radar | Radar availability check | src/radar/availability.py | tests/radar/test_availability.py | N/A |
+| REQ-RAD-003 | Rader | Return Hello, World! | src/radar/hello_world.py | tests/radar/test_hello_world.py | N/A |
+>>>>>>> Stashed changes
