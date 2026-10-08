@@ -1,11 +1,3 @@
-# Python cache files
-__pycache__/
-*.py[cod]
-.pytest_cache/
-
-# macOS metadata
-.DS_Store
-
-# Virtual environment
-.venv/
 /node_modules
+*.sh
+*.bash
