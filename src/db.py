@@ -1,20 +1,22 @@
-"""SQLite persistence for communication between ATC subteams.
+"""SQLite persistence for ATC messaging and airport data.
 
 The database path is configured with ``SQLITE_DATABASE`` and defaults to
 ``data/atc_system.db``.
 
 Call :func:`create_database` once at application startup. It creates the
-database file (when needed), creates the tables, and seeds the three supported
-teams. A database instance can then be used to send and receive messages.
+database file (when needed), creates the tables, and seeds the supported
+teams. A database instance can then manage messages, airports, and runways.
 """
 
 from __future__ import annotations
 
 import json
+import math
 import os
+import re
 import sqlite3
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timezone
 from enum import Enum
 from typing import Any, Mapping
 
@@ -24,6 +26,7 @@ class Team(str, Enum):
     RADAR = "radar"
     TOWER = "tower"
     COMMAND = "command"
+    AIRPORT = "airport"
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,26 @@ class Message:
     metadata: dict[str, Any] | None
     created_at: datetime
     read_at: datetime | None
+
+
+@dataclass(frozen=True)
+class Runway:
+    id: str
+    available: bool
+    status_time: datetime
+
+
+@dataclass(frozen=True)
+class Airport:
+    id: int
+    perimeter: float
+    longitude: float
+    latitude: float
+    runways: tuple[Runway, ...]
+
+    @property
+    def number_of_runways(self) -> int:
+        return len(self.runways)
 
 
 SCHEMA_SQL = (
@@ -63,6 +86,24 @@ SCHEMA_SQL = (
         CONSTRAINT uq_messages_id UNIQUE (id)
     )
     """,
+    """
+    CREATE TABLE IF NOT EXISTS airports (
+        id INTEGER PRIMARY KEY AUTOINCREMENT,
+        perimeter REAL NOT NULL CHECK (perimeter > 0),
+        longitude REAL NOT NULL CHECK (longitude BETWEEN -180 AND 180),
+        latitude REAL NOT NULL CHECK (latitude BETWEEN -90 AND 90)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS runways (
+        airport_id INTEGER NOT NULL,
+        id TEXT NOT NULL,
+        available INTEGER NOT NULL CHECK (available IN (0, 1)),
+        status_time TEXT NOT NULL,
+        PRIMARY KEY (airport_id, id),
+        FOREIGN KEY (airport_id) REFERENCES airports(id) ON DELETE CASCADE
+    )
+    """,
 )
 
 _TEAM_VALUES = tuple(team.value for team in Team)
@@ -76,15 +117,55 @@ def _team_value(team: Team | str) -> str:
     return value
 
 
+def _dimensions(perimeter: float, longitude: float, latitude: float) -> tuple[float, float, float]:
+    values = (perimeter, longitude, latitude)
+    if any(isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value)
+           for value in values):
+        raise ValueError("Airport dimensions must be finite numbers")
+    if perimeter <= 0 or not -180 <= longitude <= 180 or not -90 <= latitude <= 90:
+        raise ValueError("Perimeter must be positive and coordinates must be valid")
+    return float(perimeter), float(longitude), float(latitude)
+
+
+def _status_timestamp(value: datetime | str | None) -> str:
+    if value is None:
+        value = datetime.now(timezone.utc)
+    elif isinstance(value, str):
+        if not re.fullmatch(
+            r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})?",
+            value,
+        ):
+            raise ValueError("Status time must be an ISO 8601 timestamp")
+        try:
+            value = datetime.fromisoformat(value)
+        except ValueError as exc:
+            raise ValueError("Status time must be an ISO 8601 timestamp") from exc
+    if not isinstance(value, datetime):
+        raise ValueError("Status time must be an ISO 8601 timestamp")
+    return value.isoformat(timespec="seconds")
+
+
+def _runway_id(value: str) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("Runway ID cannot be empty")
+    return value.strip()
+
+
+def _availability(value: bool) -> int:
+    if not isinstance(value, bool):
+        raise ValueError("Runway availability must be a boolean")
+    return int(value)
+
+
 class MessageDatabase:
-    """Connection and operations for the cross-team message store."""
+    """Connection and operations for ATC messages and airports."""
 
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
         self.connection.execute("PRAGMA foreign_keys = ON")
 
     def initialize_schema(self) -> None:
-        """Create the schema and register Radar, Tower, and Command."""
+        """Create the schema and register all supported teams."""
         cursor = self.connection.cursor()
         try:
             for statement in SCHEMA_SQL:
@@ -194,6 +275,107 @@ class MessageDatabase:
         finally:
             cursor.close()
 
+    def create_airport(self, perimeter: float, longitude: float, latitude: float) -> Airport:
+        """REQ-APT-001: Create an airport. Perimeter is measured in meters."""
+        dimensions = _dimensions(perimeter, longitude, latitude)
+        with self.connection:
+            cursor = self.connection.execute(
+                "INSERT INTO airports (perimeter, longitude, latitude) VALUES (?, ?, ?)",
+                dimensions,
+            )
+        return Airport(int(cursor.lastrowid), *dimensions, ())
+
+    def get_airport(self, airport_id: int) -> Airport | None:
+        """Return an airport and its runways, or None if it does not exist."""
+        row = self.connection.execute(
+            "SELECT id, perimeter, longitude, latitude FROM airports WHERE id = ?",
+            (airport_id,),
+        ).fetchone()
+        if row is None:
+            return None
+        runway_rows = self.connection.execute(
+            "SELECT id, available, status_time FROM runways WHERE airport_id = ? ORDER BY id",
+            (airport_id,),
+        ).fetchall()
+        return Airport(
+            id=row["id"],
+            perimeter=row["perimeter"],
+            longitude=row["longitude"],
+            latitude=row["latitude"],
+            runways=tuple(
+                Runway(r["id"], bool(r["available"]), datetime.fromisoformat(r["status_time"]))
+                for r in runway_rows
+            ),
+        )
+
+    def list_airports(self) -> list[Airport]:
+        """List airports in ID order, including their runways."""
+        ids = self.connection.execute("SELECT id FROM airports ORDER BY id").fetchall()
+        return [airport for row in ids if (airport := self.get_airport(row["id"])) is not None]
+
+    def update_airport(
+        self, airport_id: int, perimeter: float, longitude: float, latitude: float
+    ) -> bool:
+        """Replace an airport's dimensions; return False if it does not exist."""
+        dimensions = _dimensions(perimeter, longitude, latitude)
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE airports SET perimeter = ?, longitude = ?, latitude = ? WHERE id = ?",
+                (*dimensions, airport_id),
+            )
+        return cursor.rowcount > 0
+
+    def delete_airport(self, airport_id: int) -> bool:
+        """Delete an airport and its runways."""
+        with self.connection:
+            cursor = self.connection.execute("DELETE FROM airports WHERE id = ?", (airport_id,))
+        return cursor.rowcount > 0
+
+    def create_runway(
+        self,
+        airport_id: int,
+        runway_id: str,
+        available: bool,
+        status_time: datetime | str | None = None,
+    ) -> Runway:
+        """Add a runway and its initial availability observation."""
+        runway_id = _runway_id(runway_id)
+        available_value = _availability(available)
+        timestamp = _status_timestamp(status_time)
+        with self.connection:
+            self.connection.execute(
+                "INSERT INTO runways (airport_id, id, available, status_time) VALUES (?, ?, ?, ?)",
+                (airport_id, runway_id, available_value, timestamp),
+            )
+        return Runway(runway_id, available, datetime.fromisoformat(timestamp))
+
+    def update_runway_status(
+        self,
+        airport_id: int,
+        runway_id: str,
+        available: bool,
+        status_time: datetime | str | None = None,
+    ) -> bool:
+        """Update runway availability and observation time."""
+        runway_id = _runway_id(runway_id)
+        available_value = _availability(available)
+        timestamp = _status_timestamp(status_time)
+        with self.connection:
+            cursor = self.connection.execute(
+                "UPDATE runways SET available = ?, status_time = ? WHERE airport_id = ? AND id = ?",
+                (available_value, timestamp, airport_id, runway_id),
+            )
+        return cursor.rowcount > 0
+
+    def delete_runway(self, airport_id: int, runway_id: str) -> bool:
+        """Remove a runway from an airport."""
+        with self.connection:
+            cursor = self.connection.execute(
+                "DELETE FROM runways WHERE airport_id = ? AND id = ?",
+                (airport_id, _runway_id(runway_id)),
+            )
+        return cursor.rowcount > 0
+
     def close(self) -> None:
         self.connection.close()
 
@@ -234,4 +416,4 @@ def create_database(database: str | None = None) -> MessageDatabase:
     return message_database
 
 
-__all__ = ["Message", "MessageDatabase", "Team", "create_database"]
+__all__ = ["Airport", "Message", "MessageDatabase", "Runway", "Team", "create_database"]

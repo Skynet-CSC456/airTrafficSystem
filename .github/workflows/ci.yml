@@ -6,12 +6,16 @@ on:
       - "src/**"
       - "tests/**"
       - "requirements/**"
+      - "docs/requirements-index.md"
+      - "scripts/validate_requirements.py"
 
   pull_request:
     paths:
       - "src/**"
       - "tests/**"
       - "requirements/**"
+      - "docs/requirements-index.md"
+      - "scripts/validate_requirements.py"
 
 jobs:
 
@@ -31,6 +35,7 @@ jobs:
       radar: ${{ steps.filter.outputs.radar }}
       tower: ${{ steps.filter.outputs.tower }}
       command: ${{ steps.filter.outputs.command }}
+      airport: ${{ steps.filter.outputs.airport }}
 
     steps:
 
@@ -41,19 +46,28 @@ jobs:
           filters: |
 
             radar:
+              - "src/db.py"
               - "src/radar/**"
               - "tests/radar/**"
               - "requirements/radar/**"
 
             tower:
+              - "src/db.py"
               - "src/tower/**"
               - "tests/tower/**"
               - "requirements/tower/**"
 
             command:
+              - "src/db.py"
               - "src/command/**"
               - "tests/command/**"
               - "requirements/command/**"
+
+            airport:
+              - "src/db.py"
+              - "src/airport/**"
+              - "tests/airport/**"
+              - "requirements/airport/**"
 
 
   # ============================================================
@@ -103,6 +117,17 @@ jobs:
     with:
       subsystem: command
 
+  airport:
+    name: Airport
+    needs: changes
+
+    if: needs.changes.outputs.airport == 'true'
+
+    uses: ./.github/workflows/team-tests.yml
+
+    with:
+      subsystem: airport
+
 
   # ============================================================
   # FINAL MERGE GATE
@@ -119,6 +144,7 @@ jobs:
       - radar
       - tower
       - command
+      - airport
 
     if: |
       always() &&
@@ -134,6 +160,10 @@ jobs:
       (
         needs.command.result == 'success' ||
         needs.command.result == 'skipped'
+      ) &&
+      (
+        needs.airport.result == 'success' ||
+        needs.airport.result == 'skipped'
       )
 
     runs-on: ubuntu-latest
@@ -143,24 +173,25 @@ jobs:
       - name: Checkout repository
         uses: actions/checkout@v4
 
-      - name: Make validator executable
-        run: chmod +x scripts/validate-requirements.sh
-
       # --------------------------------------------------
       # Validate only the affected subsystems
       # --------------------------------------------------
 
       - name: Validate Radar requirements
         if: needs.changes.outputs.radar == 'true'
-        run: ./scripts/validate-requirements.sh radar
+        run: python scripts/validate_requirements.py radar
 
       - name: Validate Tower requirements
         if: needs.changes.outputs.tower == 'true'
-        run: ./scripts/validate-requirements.sh tower
+        run: python scripts/validate_requirements.py tower
 
       - name: Validate Command requirements
         if: needs.changes.outputs.command == 'true'
-        run: ./scripts/validate-requirements.sh command
+        run: python scripts/validate_requirements.py command
+
+      - name: Validate Airport requirements
+        if: needs.changes.outputs.airport == 'true'
+        run: python scripts/validate_requirements.py airport
 
       - name: Validation complete
         run: echo "All affected subsystem requirements are valid."
