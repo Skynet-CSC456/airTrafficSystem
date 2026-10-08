@@ -10,3 +10,4 @@
 | REQ-COM-002 | Command | Command availability check | src/command/availability.py | tests/command/test_availability.py | N/A |
 | REQ-RAD-002 | Radar | Radar availability | src/radar/availability.py | tests/radar/test_availability.py | N/A |
 | REQ-RAD-003 | Radar | Radar updates aircraft position data every 5 seconds | src/radar/position_update.py | tests/radar/test_position_update.py | TBD |
+| REQ-CMD-010 | Command | Command and control flow |  | test_mayesha.ts | TBD |
