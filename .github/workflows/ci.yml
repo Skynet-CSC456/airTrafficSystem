@@ -39,6 +39,9 @@ jobs:
 
     steps:
 
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
       - name: Detect subsystem changes
         id: filter
         uses: dorny/paths-filter@v4
