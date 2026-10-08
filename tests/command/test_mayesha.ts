@@ -1,4 +1,4 @@
-# REQ-CMD-001
+# REQ-CMD-010
 
 def test_position_update():
     assert True
