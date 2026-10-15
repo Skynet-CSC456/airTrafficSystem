@@ -39,6 +39,15 @@ class Message:
     created_at: datetime
     read_at: datetime | None
 
+@dataclass(frozen=True)
+class AircraftStateRecord:
+    aircraft_id: str
+    latitude: float
+    longitude: float
+    status: str
+    altitude: float
+    timestamp: str
+
 
 SCHEMA_SQL = (
     """
@@ -61,6 +70,16 @@ SCHEMA_SQL = (
         CONSTRAINT fk_messages_recipient
             FOREIGN KEY (recipient_team) REFERENCES teams(name),
         CONSTRAINT uq_messages_id UNIQUE (id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS aircraft_states (
+        aircraft_id TEXT PRIMARY KEY,
+        latitude REAL NOT NULL,
+        longitude REAL NOT NULL,
+        status TEXT NOT NULL,
+        altitude REAL NOT NULL,
+        timestamp TEXT NOT NULL
     )
     """,
 )
@@ -218,6 +237,126 @@ class MessageDatabase:
             created_at=created_at,
             read_at=read_at,
         )
+
+    def create_aircraft_state(
+        self,
+        aircraft_id,
+        latitude,
+        longitude,
+        status,
+        altitude,
+        timestamp
+    ):
+        cursor = self.connection.cursor()
+
+        try:
+            cursor.execute(
+                """
+                INSERT INTO aircraft_states
+                    (aircraft_id, latitude, longitude, status, altitude, timestamp)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    aircraft_id,
+                    latitude,
+                    longitude,
+                    status,
+                    altitude,
+                    timestamp
+                )
+            )
+
+            self.connection.commit()
+
+        except sqlite3.IntegrityError:
+            self.connection.rollback()
+            raise ValueError("Aircraft ID already exists")
+
+        except Exception:
+            self.connect.rollback()
+            
+        finally:
+            cursor.close()
+
+    def update_aircraft_state(
+        self,
+        aircraft_id,
+        latitude,
+        longitude,
+        status,
+        altitude,
+        timestamp
+    ):
+        cursor = self.connection.cursor()
+
+        try:
+            cursor.execute(
+                """
+                UPDATE aircraft_states
+                SET latitude = ?,
+                    longitude = ?,
+                    status = ?,
+                    altitude = ?,
+                    timestamp = ?
+                WHERE aircraft_id = ?
+                """,
+                (
+                    latitude,
+                    longitude,
+                    status,
+                    altitude,
+                    timestamp,
+                    aircraft_id
+                )
+            )
+
+            if cursor.rowcount == 0:
+                raise ValueError("Aircraft does not exist")
+
+            self.connection.commit()
+
+        except Exception:
+            self.connection.rollback()
+            raise
+
+        finally:
+            cursor.close()
+
+    def get_aircraft_state(self, aircraft_id):
+        cursor = self.connection.cursor()
+
+        try:
+            cursor.execute(
+                """
+                SELECT aircraft_id,
+                    latitude,
+                    longitude,
+                    status,
+                    altitude,
+                    timestamp
+                FROM aircraft_states
+                WHERE aircraft_id = ?
+                """,
+                (aircraft_id,)
+            )
+
+            row = cursor.fetchone()
+
+            if row is None:
+                raise ValueError("Aircraft does not exist")
+
+            return AircraftStateRecord(
+                aircraft_id=row["aircraft_id"],
+                latitude=row["latitude"],
+                longitude=row["longitude"],
+                status=row["status"],
+                altitude=row["altitude"],
+                timestamp=row["timestamp"]
+            )
+
+        finally:
+            cursor.close()
+        
 
 
 def create_database(database: str | None = None) -> MessageDatabase:
