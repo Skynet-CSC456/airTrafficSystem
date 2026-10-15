@@ -3,6 +3,8 @@
 Also implements REQ-RAD-001.md, whose internal requirement ID is REQ-RAD-004.
 """
 
+from __future__ import annotations
+
 from dataclasses import asdict, dataclass
 from datetime import datetime
 import math
