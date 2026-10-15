@@ -44,3 +44,25 @@ db.close()
 ## Next plan
 
 Write the REST API endpoints using the `src/db.py` database functions (e.g. `send_message`, `receive_messages`) so the API accesses the database properly instead of duplicating logic.
+
+## Aircraft state demo
+
+Run a small aircraft process that sends updates to Radar and exchanges messages
+with Tower:
+
+```sh
+.venv/bin/python airplane_demo.py --updates 3 --interval 1
+```
+
+The default interval is five seconds (REQ-RAD-003). The demo uses
+`data/airplane_demo.db`, separate from the main database. Set `--database` and
+`--id` to choose a database and aircraft. Repeated runs resume the existing state.
+Each accepted update replaces the same aircraft row; no position history is kept.
+Altitude is meters above ground and timestamps are UTC `YYYY-MM-DDTHH:MM:SS`.
+Motion is a simple coordinate increment for demonstration only.
+
+`src/radar/aircraft.py` provides `AircraftState` and `AircraftStore` for CRUD and
+addressed aircraft/Tower messages. `src/radar/position_update.py` validates complete
+state payloads and applies only newer updates to registered aircraft. The local
+prototype calls Radar directly; it does not yet provide a network API or broker.
+Deleting an aircraft also deletes its aircraft-specific messages.
