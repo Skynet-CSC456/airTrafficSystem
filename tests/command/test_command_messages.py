@@ -1,7 +1,7 @@
 
 from src.db import Team, create_database
 
-
+# REQ-CMD-001: Verify that Command receives messages from Tower.
 def test_tower_message_reaches_command(tmp_path, monkeypatch):
     """Check that Command can receive a message from Tower."""
 

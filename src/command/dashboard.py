@@ -265,7 +265,7 @@ aircraft_table.pack(fill="both", expand=True, padx=10, pady=10)
 # ----------------------------------
 # LIVE TOWER MESSAGES
 # ----------------------------------
-
+# REQ-CMD-001: Receive and display messages from Tower.
 messages_frame = right_panel.winfo_children()[2]
 
 for widget in messages_frame.winfo_children():
