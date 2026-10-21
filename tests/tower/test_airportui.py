@@ -1,64 +1,46 @@
 # REQ-CMD-004: AirportUI test
-import tkinter as tk
+from src.tower.airportui import create_runways, toggle_runway, update_runway_visuals
 
-root = tk.Tk()
 
-root.title("Airport")
+class FakeCanvas:
+    def __init__(self):
+        self.configured = []
 
-canvas = tk.Canvas(root, width=400, height=400)
-canvas.pack()
+    def itemconfig(self, item_id, **kwargs):
+        self.configured.append((item_id, kwargs))
 
-#Perimeter Box
-canvas.create_rectangle(50, 50, 350, 350, width=1)
 
-runways = [
-    {
-        "id": "RWY 1",
-        "coords": (80, 80, 130, 320),
-        "available": True,
-        "rect_id": None,
-        "text_id": None
-    },
-    {
-        "id": "RWY 2",
-        "coords": (150, 180, 250, 220),
-        "available": False,
-        "rect_id": None,
-        "text_id": None
-    },
-    {
-        "id": "RWY 3",
-        "coords": (270, 80, 320, 320),
-        "available": True,
-        "rect_id": None,
-        "text_id": None
-    }
-]
+def test_create_runways_preserves_initial_statuses():
+    runways = create_runways()
 
-def update_runway_visuals(rwy):
-    """Updates color and text"""
-    color = "green" if rwy["available"] else "red"
-    status_str = "Available" if rwy["available"] else "Not Available"
-    canvas.itemconfig(rwy["rect_id"], outline=color)
-    canvas.itemconfig(rwy["text_id"], text=f"{rwy['id']}\n[{status_str}]", fill=color)
+    assert [runway["id"] for runway in runways] == ["RWY 1", "RWY 2", "RWY 3"]
+    assert [runway["available"] for runway in runways] == [True, False, True]
 
-def toggle_runway(rwy):
-    """Toggles status"""
-    rwy["available"] = not rwy["available"]
-    update_runway_visuals(rwy)
-    print(f"{rwy['id']} is now {'Available' if rwy['available'] else 'Not Available'}")
 
-for rwy in runways:
-    x1, y1, x2, y2 = rwy["coords"]
-    mid_x, mid_y = (x1 + x2) / 2, (y1 + y2) / 2
-    rect_id = canvas.create_rectangle(x1, y1, x2, y2, width=3)
-    text_id = canvas.create_text(mid_x, mid_y, justify="center")
+def test_update_runway_visuals_uses_available_color_and_text():
+    canvas = FakeCanvas()
+    runway = create_runways()[0]
+    runway["rect_id"] = "rectangle"
+    runway["text_id"] = "text"
 
-    rwy["rect_id"] = rect_id
-    rwy["text_id"] = text_id
+    update_runway_visuals(canvas, runway)
 
-    update_runway_visuals(rwy)
-    canvas.tag_bind(rect_id, "<Button-1>", lambda event, r=rwy: toggle_runway(r))
-    canvas.tag_bind(text_id, "<Button-1>", lambda event, r=rwy: toggle_runway(r))
+    assert canvas.configured == [
+        ("rectangle", {"outline": "green"}),
+        ("text", {"text": "RWY 1\n[Available]", "fill": "green"}),
+    ]
 
-root.mainloop()
+
+def test_toggle_runway_changes_status_and_visuals():
+    canvas = FakeCanvas()
+    runway = create_runways()[1]
+    runway["rect_id"] = "rectangle"
+    runway["text_id"] = "text"
+
+    toggle_runway(canvas, runway)
+
+    assert runway["available"] is True
+    assert canvas.configured[-2:] == [
+        ("rectangle", {"outline": "green"}),
+        ("text", {"text": "RWY 2\n[Available]", "fill": "green"}),
+    ]
