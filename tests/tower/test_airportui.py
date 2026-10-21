@@ -1,4 +1,4 @@
-# REQ-CMD-004: AirportUI test
+# REQ-TWR-004: AirportUI test
 from src.tower.airportui import create_runways, toggle_runway, update_runway_visuals
 
 

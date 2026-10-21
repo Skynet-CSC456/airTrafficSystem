@@ -1,4 +1,4 @@
-# REQ-CMD-004: AirportUI implementation
+# REQ-TWR-004: AirportUI implementation
 import tkinter as tk
 
 
