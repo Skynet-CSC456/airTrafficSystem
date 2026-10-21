@@ -1,3 +1,4 @@
+# REQ-CMD-004: AirportUI test
 import tkinter as tk
 
 root = tk.Tk()
