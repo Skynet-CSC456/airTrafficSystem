@@ -23,3 +23,13 @@ Radar subsystem will ingest and update aircraft state to maintain most recent in
 - Altitude is saved as aircrafts current distance from the ground.
 - Status must be either parked, departing, or landing.
 - Timestamp is stored with every state update. 
+
+## Source Code: 
+
+src/radar/aircraft_state.py
+src/radar/messaging.py
+
+## Test Code:
+
+tests/radar/test_aircraft_state.py
+tests/radar/test_messaging.py

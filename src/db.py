@@ -47,6 +47,7 @@ class AircraftStateRecord:
     status: str
     altitude: float
     timestamp: str
+    runway_id: str | None = None
 
 
 SCHEMA_SQL = (
@@ -79,7 +80,8 @@ SCHEMA_SQL = (
         longitude REAL NOT NULL,
         status TEXT NOT NULL,
         altitude REAL NOT NULL,
-        timestamp TEXT NOT NULL
+        timestamp TEXT NOT NULL,
+        runway_id TEXT NULL
     )
     """,
 )
@@ -333,7 +335,8 @@ class MessageDatabase:
                     longitude,
                     status,
                     altitude,
-                    timestamp
+                    timestamp,
+                    runway_id
                 FROM aircraft_states
                 WHERE aircraft_id = ?
                 """,
@@ -351,11 +354,46 @@ class MessageDatabase:
                 longitude=row["longitude"],
                 status=row["status"],
                 altitude=row["altitude"],
-                timestamp=row["timestamp"]
+                timestamp=row["timestamp"],
+                runway_id=row["runway_id"]
+
             )
 
         finally:
             cursor.close()
+
+    def assign_runway_to_aircraft(
+        self,
+        aircraft_id,
+        runway_id
+    ):
+        cursor = self.connection.cursor()
+
+        try:
+            cursor.execute(
+                """
+                UPDATE aircraft_states
+                SET runway_id = ?
+                WHERE aircraft_id = ?
+                """,
+                (
+                    runway_id,
+                    aircraft_id
+                )
+            )
+
+            if cursor.rowcount == 0:
+                raise ValueError("Aircraft does not exist")
+
+            self.connection.commit()
+
+        except Exception:
+            self.connection.rollback()
+            raise
+
+        finally: 
+            cursor.close()
+        
         
 
 

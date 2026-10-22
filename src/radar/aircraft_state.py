@@ -110,3 +110,12 @@ class AircraftStateStore:
 
     def get_aircraft_state(self, aircraft_id):
         return self.db.get_aircraft_state(aircraft_id)
+
+    def assign_runway(self, aircraft_id, runway_id
+    ):
+        self.db.assign_runway_to_aircraft(
+            aircraft_id,
+            runway_id
+        )
+
+        return self.db.get_aircraft_state(aircraft_id)

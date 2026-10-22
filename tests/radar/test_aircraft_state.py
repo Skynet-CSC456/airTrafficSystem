@@ -32,6 +32,7 @@ def test_create_new_aircraft_state(store):
     assert aircraft.status == "departing"
     assert aircraft.altitude == 3500
     assert aircraft.timestamp == "2026-10-15 10:30:00"
+    assert aircraft.runway_id is None
 
 def test_update_existing_aircraft_state(store):
     store.create_aircraft_state(
@@ -194,3 +195,21 @@ def test_get_nonexistent_aircraft(store):
         match="Aircraft does not exist"
     ):
         store.get_aircraft_state("UNKNOWN123")
+
+def test_assign_runway_to_aircraft(store):
+    store.create_aircraft_state(
+        aircraft_id="AAL123",
+        latitude=40.6413,
+        longitude=-73.7781,
+        status="landing",
+        altitude=1500,
+        timestamp="2026-10-22 11:30:00"
+    )
+
+    aircraft = store.assign_runway(
+        "AAL123",
+        "RWY 1"
+    )
+
+    assert aircraft.aircraft_id == "AAL123"
+    assert aircraft.runway_id == "RWY 1"
