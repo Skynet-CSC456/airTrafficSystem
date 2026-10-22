@@ -1,3 +1,5 @@
+from datetime import datetime, timezone
+
 from src.db import Team, create_database
 from src.tower.messaging import (
     assign_runway_to_aircraft,
@@ -111,6 +113,29 @@ def send_messages(db, team):
         print(f"\nCould not send message: {error}")
 
 
+def format_value(value):
+    """Show ISO timestamps as 'YYYY-MM-DD HH:MM:SS UTC' and snake_case names as words."""
+    if not isinstance(value, str):
+        return value
+    try:
+        moment = datetime.fromisoformat(value)
+    except ValueError:
+        return value.replace("_", " ") if value.isidentifier() else value
+    if moment.tzinfo is not None:
+        return f"{moment.astimezone(timezone.utc):%Y-%m-%d %H:%M:%S} UTC"
+    return f"{moment:%Y-%m-%d %H:%M:%S}"
+
+
+def describe_metadata(metadata):
+    """Turn a message's metadata dict into readable (label, value) pairs."""
+    if not metadata:
+        return []
+    return [
+        (key.removesuffix("_id").replace("_", " ").capitalize(), format_value(value))
+        for key, value in metadata.items()
+    ]
+
+
 def read_messages(db, team):
     messages = db.receive_messages(team, limit=MAX_MESSAGES)
 
@@ -128,8 +153,8 @@ def read_messages(db, team):
         if message.message_type != "text":
             print(f"Type: {message.message_type}")
         print(f"Message: {message.content}")
-        if message.metadata:
-            print(f"Data: {message.metadata}")
+        for label, value in describe_metadata(message.metadata):
+            print(f"  {label}: {value}")
         print(f"Sent: {message.created_at}")
 
     # Everything shown has now been seen, so clear the unread counter.
