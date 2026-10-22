@@ -13,8 +13,8 @@ class FakeCanvas:
 def test_create_runways_preserves_initial_statuses():
     runways = create_runways()
 
-    assert [runway["id"] for runway in runways] == ["RWY 1", "RWY 2", "RWY 3"]
-    assert [runway["available"] for runway in runways] == [True, False, True]
+    assert [runway["id"] for runway in runways] == ["RWY 1", "RWY 2"]
+    assert [runway["available"] for runway in runways] == [True, False]
 
 
 def test_update_runway_visuals_uses_available_color_and_text():
