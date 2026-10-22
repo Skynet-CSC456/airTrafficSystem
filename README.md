@@ -1,6 +1,6 @@
 # ATC System
 
-This repository contains the ATC (Air Traffic Control) subsystem structure for Radar, Tower, and Command teams.
+This repository contains the ATC (Air Traffic Control) subsystem structure for Radar, Tower, Command, and Airport teams.
 
 ## Directory Overview
 
@@ -16,6 +16,7 @@ This repository contains the ATC (Air Traffic Control) subsystem structure for R
 - `radar/`
 - `tower/`
 - `command/`
+- `airport/`
 
 ## Development Notes
 
@@ -38,8 +39,31 @@ messages = db.receive_messages(Team.TOWER, unread_only=True, mark_as_read=True)
 db.close()
 ```
 
-`create_database()` creates the database file, the `teams` table, and the
-`messages` table, and registers the Radar, Tower, and Command teams.
+`create_database()` creates the database file, the `teams`, `messages`,
+`airports`, and `runways` tables, and registers the Radar, Tower, Command, and
+Airport teams.
+
+## Airport process
+
+Run the Airport command line process from the repository root. It uses the same
+`SQLITE_DATABASE` setting as the message store; pass `--database PATH` to use a
+specific file. Perimeter is in meters; longitude and latitude are decimal
+degrees. Runway count is computed from its records.
+
+```sh
+python -m src.airport create 12000 -73.7781 40.6413
+python -m src.airport add-runway 1 04L available --time 2026-10-08T09:30:00
+python -m src.airport get 1
+python -m src.airport status 1 04L unavailable
+python -m src.airport send radar "Runway 04L unavailable"
+python -m src.airport receive --unread --mark-read
+```
+
+Other commands are `list`, `update`, `delete`, and `remove-runway`. The Python
+API is available through `create_database()` (`create_airport`, `get_airport`,
+`list_airports`, `update_airport`, `delete_airport`, `create_runway`,
+`update_runway_status`, and `delete_runway`) and
+`src.airport.messaging` (`send_message` and `receive_messages`).
 
 ## Next plan
 

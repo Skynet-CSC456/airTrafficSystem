@@ -9,3 +9,5 @@ data/
 # Virtual environment
 .venv/
 /node_modules
+*.sh
+*.bash
