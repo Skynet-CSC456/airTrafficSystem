@@ -1,3 +1,13 @@
+# Python cache files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# macOS metadata
+.DS_Store
+data/
+# Virtual environment
+.venv/
 /node_modules
 *.sh
 *.bash

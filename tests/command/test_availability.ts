@@ -1,15 +1,15 @@
 import assert from "node:assert";
 import { testing } from "../../src/command/availability";
 
-//REQ-COM-002 check
-describe("REQ-COM-002 - Command availability check", () => {
+// REQ-CMD-002: Command availability check
+describe("REQ-CMD-002 - Command availability check", () => {
     it("testing function is available", () => {
         assert.strictEqual(typeof testing, "function");
     });
 });
 
-//REQ-COM-AA1-availability check
-describe("REQ-COM-AA1-availability - Command availability check", () => {
+// REQ-CMD-003: Command availability check
+describe("REQ-CMD-003 - Command availability check", () => {
     it("testing function is available", () => {
         assert.strictEqual(typeof testing, "function");
     });
