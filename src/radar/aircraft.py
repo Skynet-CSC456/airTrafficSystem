@@ -1,4 +1,4 @@
-"""REQ-RAD-004: Aircraft state CRUD and aircraft/Tower messaging.
+"""REQ-RAD-004 and REQ-RAD-005: aircraft state storage and shared live-state updates.
 
 Also implements REQ-RAD-001.md, whose internal requirement ID is REQ-RAD-004.
 """
@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass
 from datetime import datetime
+import json
 import math
 import re
 
@@ -66,12 +67,35 @@ class AircraftStore:
                 )
             """)
 
+    def _save_shared_state(self, state: AircraftState) -> None:
+        payload = {
+            'id': state.id,
+            'latitude': state.latitude,
+            'longitude': state.longitude,
+            'status': state.status,
+            'altitude': state.altitude,
+            'timestamp': state.timestamp,
+            'fresh': True,
+        }
+        self.connection.execute(
+            """
+            INSERT INTO shared_state (key, category, payload, updated_at)
+            VALUES (?, 'aircraft', ?, CURRENT_TIMESTAMP)
+            ON CONFLICT(key) DO UPDATE SET
+                category = excluded.category,
+                payload = excluded.payload,
+                updated_at = CURRENT_TIMESTAMP
+            """,
+            (f'aircraft:{state.id}', json.dumps(payload)),
+        )
+
     def create(self, state: AircraftState) -> AircraftState:
         with self.connection:
             self.connection.execute(
                 "INSERT INTO aircraft (id, latitude, longitude, status, altitude, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
                 tuple(asdict(state).values()),
             )
+            self._save_shared_state(state)
         return state
 
     def get(self, aircraft_id: str) -> AircraftState | None:
@@ -91,11 +115,15 @@ class AircraftStore:
                 WHERE id=? AND timestamp < ?
             """, (state.latitude, state.longitude, state.status, state.altitude,
                   state.timestamp, state.id, state.timestamp))
+            if cursor.rowcount == 1:
+                self._save_shared_state(state)
         return cursor.rowcount == 1
 
     def delete(self, aircraft_id: str) -> bool:
         with self.connection:
             cursor = self.connection.execute("DELETE FROM aircraft WHERE id=?", (aircraft_id,))
+            if cursor.rowcount == 1:
+                self.connection.execute("DELETE FROM shared_state WHERE key = ?", (f'aircraft:{aircraft_id}',))
         return cursor.rowcount == 1
 
     def send_message(self, aircraft_id: str, content: str, *, to_tower: bool) -> int:

@@ -13,6 +13,7 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import stat
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -61,6 +62,14 @@ SCHEMA_SQL = (
         CONSTRAINT fk_messages_recipient
             FOREIGN KEY (recipient_team) REFERENCES teams(name),
         CONSTRAINT uq_messages_id UNIQUE (id)
+    )
+    """,
+    """
+    CREATE TABLE IF NOT EXISTS shared_state (
+        key TEXT PRIMARY KEY,
+        category TEXT NOT NULL DEFAULT 'system',
+        payload TEXT NOT NULL,
+        updated_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
     )
     """,
 )
@@ -194,6 +203,66 @@ class MessageDatabase:
         finally:
             cursor.close()
 
+    def upsert_shared_state(self, key: str, payload: Any, *, category: str = "system") -> dict[str, Any]:
+        """Persist a JSON-serializable shared-state payload and return it."""
+        if not isinstance(key, str) or not key.strip():
+            raise ValueError("Shared-state key cannot be empty")
+        serialized = json.dumps(payload)
+        cursor = self.connection.cursor()
+        try:
+            cursor.execute(
+                """
+                INSERT INTO shared_state (key, category, payload, updated_at)
+                VALUES (?, ?, ?, CURRENT_TIMESTAMP)
+                ON CONFLICT(key) DO UPDATE SET
+                    category = excluded.category,
+                    payload = excluded.payload,
+                    updated_at = CURRENT_TIMESTAMP
+                """,
+                (key.strip(), category.strip() or "system", serialized),
+            )
+            self.connection.commit()
+            return self.get_shared_state(key)
+        except Exception:
+            self.connection.rollback()
+            raise
+        finally:
+            cursor.close()
+
+    def get_shared_state(self, key: str) -> dict[str, Any] | None:
+        """Return the latest payload for a shared-state key or None if missing."""
+        row = self.connection.execute(
+            "SELECT key, category, payload, updated_at FROM shared_state WHERE key = ?",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return None
+        return {
+            "key": row["key"],
+            "category": row["category"],
+            "payload": json.loads(row["payload"]),
+            "updated_at": row["updated_at"],
+        }
+
+    def list_shared_state(self, *, category: str | None = None) -> list[dict[str, Any]]:
+        """Return all shared-state rows, optionally filtered to a category."""
+        query = "SELECT key, category, payload, updated_at FROM shared_state"
+        params: list[str] = []
+        if category is not None:
+            query += " WHERE category = ?"
+            params.append(category)
+        query += " ORDER BY updated_at ASC, key ASC"
+        rows = self.connection.execute(query, params).fetchall()
+        return [
+            {
+                "key": row["key"],
+                "category": row["category"],
+                "payload": json.loads(row["payload"]),
+                "updated_at": row["updated_at"],
+            }
+            for row in rows
+        ]
+
     def close(self) -> None:
         self.connection.close()
 
@@ -220,12 +289,24 @@ class MessageDatabase:
         )
 
 
+def _ensure_database_writable(database: str) -> None:
+    """Make an existing SQLite database writable for the current user."""
+    if database == ":memory:":
+        return
+    if not os.path.exists(database):
+        return
+    mode = os.stat(database).st_mode
+    if not os.access(database, os.W_OK):
+        os.chmod(database, mode | stat.S_IWUSR)
+
+
 def create_database(database: str | None = None) -> MessageDatabase:
     """Open the configured SQLite database and initialize its schema."""
     database = database or os.getenv("SQLITE_DATABASE", os.path.join("data", "atc_system.db"))
     if database != ":memory:":
         parent = os.path.dirname(os.path.abspath(database))
         os.makedirs(parent, exist_ok=True)
+        _ensure_database_writable(database)
 
     connection = sqlite3.connect(database, detect_types=sqlite3.PARSE_DECLTYPES)
     connection.row_factory = sqlite3.Row

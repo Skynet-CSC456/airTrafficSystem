@@ -18,13 +18,6 @@ def create_runways():
             "rect_id": None,
             "text_id": None,
         },
-        {
-            "id": "RWY 3",
-            "coords": (270, 80, 320, 320),
-            "available": True,
-            "rect_id": None,
-            "text_id": None,
-        },
     ]
 
 

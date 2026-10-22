@@ -5,7 +5,7 @@ __pycache__/
 
 # macOS metadata
 .DS_Store
-
+data/
 # Virtual environment
 .venv/
 /node_modules
