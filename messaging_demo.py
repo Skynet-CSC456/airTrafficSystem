@@ -1,4 +1,9 @@
 from src.db import Team, create_database
+from src.tower.messaging import (
+    assign_runway_to_aircraft,
+    list_airborne_aircraft,
+    load_runways,
+)
 
 MAX_MESSAGES = 10_000
 
@@ -28,7 +33,64 @@ def count_unread(db, team):
     return len(db.receive_messages(team, unread_only=True, limit=MAX_MESSAGES))
 
 
+def choose_option(prompt, options):
+    """Ask for one of `options` (a list of labels) and return its 0-based index."""
+    for number, label in enumerate(options, start=1):
+        print(f"{number}. {label}")
+    while True:
+        answer = input(prompt).strip()
+        if answer.isdigit() and 1 <= int(answer) <= len(options):
+            return int(answer) - 1
+        print(f"Invalid option. Select a number from 1 to {len(options)}.")
+
+
+def assign_runway_function(db):
+    """Tower function: pick an airborne airplane, assign it a runway, notify Radar and Command."""
+    aircraft = list_airborne_aircraft(db)
+    if not aircraft:
+        print("\nNo airplanes are in the air right now.")
+        return
+
+    print("\nAirplanes in the air:")
+    chosen = aircraft[
+        choose_option(
+            "Select an airplane: ",
+            [f"{a.id}  ({a.status}, {a.altitude:g} m)" for a in aircraft],
+        )
+    ]
+
+    runways = load_runways(db)
+    print(f"\nRunways for {chosen.id}:")
+    runway = runways[
+        choose_option(
+            "Select a runway: ",
+            [f"{r['id']}  ({'available' if r.get('available') else 'occupied'})" for r in runways],
+        )
+    ]
+
+    try:
+        decision = assign_runway_to_aircraft(db, chosen.id, runway["id"])
+    except ValueError as error:
+        print(f"\nCould not assign runway: {error}")
+        return
+
+    print("\nRunway assigned! Function message sent to radar and command.")
+    print(f"Airplane: {decision['aircraft_id']}")
+    print(f"Runway: {decision['runway_id']}")
+    for recipient, message_id in decision["message_ids"].items():
+        print(f"Message ID ({recipient}): {message_id}")
+
+
 def send_messages(db, team):
+    if team == Team.TOWER:
+        kind = choose_option(
+            "What do you want to send? ",
+            ["Text message", "Function: assign runway to an airplane"],
+        )
+        if kind == 1:
+            assign_runway_function(db)
+            return
+
     recipient = choose_team(
         "Who do you want to send the message to? (radar/tower/command): ",
         exclude=team,
@@ -63,7 +125,11 @@ def read_messages(db, team):
         print("\n--------------------------")
         print(f"Message ID: {message.id}{status}")
         print(f"From: {message.sender.value}")
+        if message.message_type != "text":
+            print(f"Type: {message.message_type}")
         print(f"Message: {message.content}")
+        if message.metadata:
+            print(f"Data: {message.metadata}")
         print(f"Sent: {message.created_at}")
 
     # Everything shown has now been seen, so clear the unread counter.
