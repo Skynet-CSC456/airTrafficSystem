@@ -46,6 +46,27 @@ def list_airborne_aircraft(db: MessageDatabase) -> list[AircraftState]:
     return [state for state in AircraftStore(db).list() if state.altitude > 0]
 
 
+def is_waiting_to_depart(db: MessageDatabase, aircraft_id: str) -> bool:
+    """REQ-TWR-006: Radar has a pending departure request for this aircraft (REQ-RAD-006)."""
+    record = db.get_shared_state(f"request:{aircraft_id}")
+    return (
+        record is not None
+        and record["payload"].get("status") == "requested"
+        and record["payload"].get("request_type") == "departure"
+    )
+
+
+def list_assignable_aircraft(db: MessageDatabase) -> list[AircraftState]:
+    """REQ-TWR-006: aircraft Tower may assign a runway to.
+
+    Aircraft in the air, plus aircraft on the ground that are waiting to depart.
+    """
+    return [
+        state for state in AircraftStore(db).list()
+        if state.altitude > 0 or is_waiting_to_depart(db, state.id)
+    ]
+
+
 def load_runways(db: MessageDatabase) -> list[dict]:
     """REQ-TWR-006: runways from shared state, seeding the defaults on first use."""
     runways = [row["payload"] for row in db.list_shared_state(category="runway")]
@@ -59,7 +80,7 @@ def load_runways(db: MessageDatabase) -> list[dict]:
 def assign_runway_to_aircraft(
     db: MessageDatabase, aircraft_id: str, runway_id: str
 ) -> dict:
-    """REQ-TWR-006: assign ``runway_id`` to an airborne aircraft.
+    """REQ-TWR-006: assign ``runway_id`` to an airborne aircraft or one waiting to depart.
 
     The runway must be available and safe for the aircraft. On success the
     decision and runway are written to shared state and a ``function`` message
@@ -69,8 +90,8 @@ def assign_runway_to_aircraft(
     aircraft = AircraftStore(db).get(aircraft_id)
     if aircraft is None:
         raise ValueError(f"Unknown aircraft {aircraft_id!r}")
-    if aircraft.altitude <= 0:
-        raise ValueError(f"Aircraft {aircraft_id!r} is not in the air")
+    if aircraft.altitude <= 0 and not is_waiting_to_depart(db, aircraft_id):
+        raise ValueError(f"Aircraft {aircraft_id!r} is not in the air and has not requested departure")
 
     runways = load_runways(db)
     decision = assign_runway(runways, asdict(aircraft), runway_id=runway_id)
@@ -98,3 +119,4 @@ def assign_runway_to_aircraft(
         for recipient in (Team.RADAR, Team.COMMAND)
     }
     return decision
+
