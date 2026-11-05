@@ -7,9 +7,12 @@ import pytest
 import messaging_demo
 from src.db import Team, create_database
 from src.radar.aircraft import AircraftState, AircraftStore
+from src.radar.messaging import process_runway_assignments, request_runway
 from src.tower.messaging import (
     assign_runway_to_aircraft,
+    is_waiting_to_depart,
     list_airborne_aircraft,
+    list_assignable_aircraft,
     load_runways,
 )
 
@@ -112,8 +115,9 @@ def test_demo_tower_send_menu_still_sends_text(db, monkeypatch):
 
 
 def test_demo_other_teams_skip_the_function_menu(db, monkeypatch):
+    # Command has no function menu (Radar has its own since REQ-RAD-006).
     _feed_inputs(monkeypatch, ["tower", "hi tower"])
-    messaging_demo.send_messages(db, Team.RADAR)
+    messaging_demo.send_messages(db, Team.COMMAND)
 
     assert [m.content for m in db.receive_messages(Team.TOWER)] == ["hi tower"]
 
@@ -127,3 +131,50 @@ def test_demo_reports_when_no_aircraft_in_the_air(monkeypatch, capsys):
         assert empty.receive_messages(Team.RADAR) == []
     finally:
         empty.close()
+
+
+def test_ground_aircraft_waiting_to_depart_is_offered_and_assigned(db):
+    # REQ-TWR-006 / REQ-RAD-006: AC003 is parked at 0 m and asks to depart.
+    assert [a.id for a in list_assignable_aircraft(db)] == ["AC001", "AC002"]
+    request_runway(db, "AC003", "departure")
+
+    assert is_waiting_to_depart(db, "AC003")
+    assert [a.id for a in list_assignable_aircraft(db)] == ["AC001", "AC002", "AC003"]
+    decision = assign_runway_to_aircraft(db, "AC003", "RWY 1")
+    assert decision["status"] == "cleared"
+    (message,) = db.receive_messages(Team.RADAR)
+    assert message.metadata["aircraft_id"] == "AC003"
+
+
+def test_departure_is_no_longer_pending_once_radar_records_the_runway(db):
+    # REQ-TWR-006 / REQ-RAD-006
+    request_runway(db, "AC003", "departure")
+    assign_runway_to_aircraft(db, "AC003", "RWY 1")
+    process_runway_assignments(db)
+
+    assert not is_waiting_to_depart(db, "AC003")
+    assert "AC003" not in [a.id for a in list_assignable_aircraft(db)]
+
+
+@pytest.mark.parametrize("request_type", [None, "landing"])
+def test_ground_aircraft_without_a_departure_request_is_rejected(db, request_type):
+    # REQ-TWR-006: parked with no request, or with a landing request, is not cleared to depart.
+    if request_type:
+        request_runway(db, "AC003", request_type)
+    with pytest.raises(ValueError, match="not in the air and has not requested departure"):
+        assign_runway_to_aircraft(db, "AC003", "RWY 1")
+    assert db.receive_messages(Team.RADAR) == []
+
+
+def test_demo_tower_menu_offers_aircraft_waiting_to_depart(db, monkeypatch, capsys):
+    # REQ-TWR-006: Tower -> send -> function -> airplane 3 (AC003, waiting to depart) -> runway 1
+    request_runway(db, "AC003", "departure")
+    _feed_inputs(monkeypatch, ["2", "3", "1"])
+    messaging_demo.send_messages(db, Team.TOWER)
+
+    out = capsys.readouterr().out
+    assert "AC003  (Parked, 0 m, waiting to depart)" in out
+    assert "Function message sent to radar and command" in out
+    (message,) = db.receive_messages(Team.COMMAND)
+    assert (message.metadata["aircraft_id"], message.metadata["runway_id"]) == ("AC003", "RWY 1")
+
