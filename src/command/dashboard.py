@@ -56,6 +56,24 @@ def _decision_display(decision: dict[str, Any]) -> str:
     return f"{status.title()} - {aircraft_id}"
 
 
+def format_clock(value: Any) -> str:
+    """Return HH:MM for ISO timestamps or leave other values alone."""
+    if value is None:
+        return "--"
+    text = str(value).strip()
+    if not text or text == "--":
+        return "--"
+    if "T" in text and len(text) >= 16:
+        time_part = text.split("T", 1)[1]
+        if len(time_part) >= 5:
+            return time_part[:5]
+    if ":" in text:
+        parts = text.split(":")
+        if len(parts) >= 2:
+            return f"{parts[0]}:{parts[1]}"
+    return text
+
+
 def build_dashboard_snapshot(db: MessageDatabase) -> dict[str, Any]:
     """Build the unified command snapshot from shared state and live aircraft data."""
     aircraft_store = AircraftStore(db)
@@ -72,11 +90,22 @@ def build_dashboard_snapshot(db: MessageDatabase) -> dict[str, Any]:
                 "fresh": True,
             }
         )
+    if not aircraft:
+        for row in db.list_shared_state(category="aircraft"):
+            payload = dict(row["payload"])
+            aircraft.append(payload)
     shared = db.list_shared_state()
     runway_rows = [row for row in shared if row["key"].startswith("runway:")]
-    runways = update_runway_availability([dict(row["payload"]) for row in runway_rows])
+    default_runways = [{"id": "RWY 1", "available": True, "mode": "landing"}, {"id": "RWY 2", "available": True, "mode": "landing"}]
+    runway_map = {str(row["payload"].get("id")): dict(row["payload"]) for row in runway_rows if row["payload"].get("id") is not None}
+    for runway in default_runways:
+        runway_id = str(runway["id"])
+        if runway_id not in runway_map:
+            db.upsert_shared_state(f"runway:{runway_id}", runway, category="runway")
+            runway_map[runway_id] = runway
+    runways = update_runway_availability(list(runway_map.values()))
     if not runways:
-        runways = [{"id": "RWY 1", "available": True, "mode": "landing"}, {"id": "RWY 2", "available": True, "mode": "landing"}]
+        runways = default_runways
     decisions = [row["payload"] for row in shared if row["key"].startswith("decision:")]
     requests = [row["payload"] for row in shared if row["key"].startswith("request:")]
     display_decisions = decisions + requests
@@ -157,6 +186,15 @@ def _launch_tk_dashboard(db: MessageDatabase | None = None):
 
     airport_frame = tk.LabelFrame(main, text=" AIRPORT MAP ", font=("Arial", 13, "bold"), fg="white", bg="#1E293B")
     airport_frame.pack(side="left", fill="both", expand=True, padx=(0, 15))
+
+    zoom_level = 1.0
+    map_controls = tk.Frame(airport_frame, bg="#1E293B")
+    map_controls.pack(fill="x", padx=15, pady=(10, 0))
+    zoom_label = tk.Label(map_controls, text="Zoom 1.0x", fg="white", bg="#1E293B", font=("Arial", 10, "bold"))
+    zoom_label.pack(side="left")
+    tk.Button(map_controls, text="-", width=3, command=lambda: set_map_zoom(zoom_level - 0.25), bg="#334155", fg="white", activebackground="#475569", borderwidth=0).pack(side="right", padx=(0, 8))
+    tk.Button(map_controls, text="+", width=3, command=lambda: set_map_zoom(zoom_level + 0.25), bg="#334155", fg="white", activebackground="#475569", borderwidth=0).pack(side="right")
+
     canvas = tk.Canvas(airport_frame, bg="#142536", highlightthickness=0)
     canvas.pack(fill="both", expand=True, padx=15, pady=15)
 
@@ -189,28 +227,89 @@ def _launch_tk_dashboard(db: MessageDatabase | None = None):
     decision_list = tk.Listbox(decision_frame, bg="#1E293B", fg="white", font=("Arial", 11), selectbackground="#334155")
     decision_list.pack(fill="both", expand=True, padx=10, pady=10)
 
+    def set_map_zoom(new_zoom):
+        nonlocal zoom_level
+        zoom_level = max(0.75, min(2.5, new_zoom))
+        zoom_label.config(text=f"Zoom {zoom_level:.1f}x")
+        draw_map()
+
     def draw_airport(runways):
         canvas.delete("all")
         width = canvas.winfo_width()
         height = canvas.winfo_height()
-        margin = 45
-        canvas.create_rectangle(margin, margin, width - margin, height - margin, outline="#94A3B8", width=2, dash=(6, 4))
-        runway_width = 65
-        runway_height = min(350, height - 160)
-        center_x = width / 2
-        center_y = height / 2
-        positions = [center_x - 170, center_x, center_x + 170]
+        map_left = 20
+        map_top = 20
+        map_right = width - 20
+        map_bottom = height - 20
+
+        canvas.create_rectangle(map_left, map_top, map_right, map_bottom, fill="#0F172A", outline="#1E293B", width=2, tags="airport")
+
+        airport_left = width * 0.28
+        airport_top = height * 0.22
+        airport_right = width * 0.72
+        airport_bottom = height * 0.78
+        canvas.create_rectangle(airport_left, airport_top, airport_right, airport_bottom, fill="#0B1220", outline="#38BDF8", width=2, tags="airport")
+
+        runway_width = 44
+        runway_height = 180
+        center_x = (airport_left + airport_right) / 2
+        center_y = (airport_top + airport_bottom) / 2
+        positions = [center_x - 90, center_x, center_x + 90]
         for i, runway in enumerate(runways):
-            x = positions[i]
+            x = positions[min(i, len(positions) - 1)]
             y = center_y
             color = "#22C55E" if runway.get("available", True) else "#EF4444"
             x1 = x - runway_width / 2
             y1 = y - runway_height / 2
             x2 = x + runway_width / 2
             y2 = y + runway_height / 2
-            canvas.create_rectangle(x1, y1, x2, y2, fill="#243447", outline=color, width=3)
-            canvas.create_line(x, y1 + 15, x, y2 - 15, fill="#CBD5E1", width=2, dash=(10, 10))
-            canvas.create_text(x, y2 + 22, text=runway.get("id", f"RWY {i + 1}"), fill="white", font=("Arial", 12, "bold"))
+            canvas.create_rectangle(x1, y1, x2, y2, fill="#243447", outline=color, width=3, tags="airport")
+            canvas.create_line(x, y1 + 15, x, y2 - 15, fill="#CBD5E1", width=2, dash=(10, 10), tags="airport")
+            canvas.create_text(x, y2 + 18, text=runway.get("id", f"RWY {i + 1}"), fill="white", font=("Arial", 11, "bold"), tags="airport")
+
+    def aircraft_to_canvas_position(aircraft):
+        width = canvas.winfo_width()
+        height = canvas.winfo_height()
+
+        map_left = 20
+        map_top = 20
+        map_right = width - 20
+        map_bottom = height - 20
+
+        lat = aircraft.get("latitude")
+        lon = aircraft.get("longitude")
+        if lat is None or lon is None:
+            return None
+
+        lat_min = 40.635
+        lat_max = 40.650
+        lon_min = -73.785
+        lon_max = -73.772
+
+        norm_x = (float(lon) - lon_min) / (lon_max - lon_min)
+        norm_y = (float(lat) - lat_min) / (lat_max - lat_min)
+
+        x = map_left + norm_x * (map_right - map_left)
+        y = map_bottom - norm_y * (map_bottom - map_top)
+        x = max(map_left, min(map_right, x))
+        y = max(map_top, min(map_bottom, y))
+        return x, y
+
+    def draw_aircraft(aircraft_list):
+        for aircraft in aircraft_list:
+            pos = aircraft_to_canvas_position(aircraft)
+            if pos is None:
+                continue
+            x, y = pos
+            canvas.create_text(x, y, text="✈", fill="#FBBF24", font=("Arial", 32, "bold"), tags="aircraft")
+            canvas.create_text(x, y + 36, text=aircraft.get("id", "AIRCRAFT"), fill="white", font=("Arial", 12, "bold"), tags="aircraft")
+
+    def draw_map():
+        snapshot = build_dashboard_snapshot(db)
+        draw_airport(snapshot.get("runways", [{"id": "RWY 1", "available": True}, {"id": "RWY 2", "available": True}]))
+        draw_aircraft(snapshot.get("aircraft", []))
+        canvas.tag_raise("aircraft")
+        canvas.update_idletasks()
 
     def refresh_view():
         snapshot = build_dashboard_snapshot(db)
@@ -250,7 +349,7 @@ def _launch_tk_dashboard(db: MessageDatabase | None = None):
                     aircraft.get("id", "--"),
                     aircraft.get("status", "Unknown"),
                     f"{aircraft.get('altitude', 0)} m",
-                    aircraft.get("timestamp", "--"),
+                    format_clock(aircraft.get("timestamp", "--")),
                 ),
             )
 
@@ -264,10 +363,13 @@ def _launch_tk_dashboard(db: MessageDatabase | None = None):
             for decision in snapshot["decisions"]:
                 decision_list.insert(tk.END, _decision_display(decision))
 
-        draw_airport(snapshot.get("runways", [{"id": "RWY 1", "available": True}, {"id": "RWY 2", "available": True}]))
+        draw_map()
         root.after(2000, refresh_view)
 
-    canvas.bind("<Configure>", lambda event: draw_airport(build_dashboard_snapshot(db).get("runways", [{"id": "RWY 1", "available": True}, {"id": "RWY 2", "available": True}])))
+    def handle_canvas_resize(event):
+        draw_map()
+
+    canvas.bind("<Configure>", handle_canvas_resize)
     refresh_view()
     root.mainloop()
 

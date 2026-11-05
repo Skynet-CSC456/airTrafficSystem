@@ -33,8 +33,8 @@ class AircraftState:
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper:
                 raise ValueError(f"Invalid {name}: {value!r}")
-        if self.status not in ("Parked", "Departing", "Landing"):
-            raise ValueError("Status must be Parked, Departing, or Landing")
+        if self.status not in ("Parked", "Departing", "Landing", "Airborne"):
+            raise ValueError("Status must be Parked, Departing, Airborne, or Landing")
         if not isinstance(self.timestamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", self.timestamp):
             raise ValueError("Timestamp must be UTC YYYY-MM-DDTHH:MM:SS")
         datetime.strptime(self.timestamp, "%Y-%m-%dT%H:%M:%S")
@@ -51,7 +51,7 @@ class AircraftStore:
                     id TEXT PRIMARY KEY NOT NULL,
                     latitude REAL NOT NULL CHECK(latitude BETWEEN -90 AND 90),
                     longitude REAL NOT NULL CHECK(longitude BETWEEN -180 AND 180),
-                    status TEXT NOT NULL CHECK(status IN ('Parked','Departing','Landing')),
+                    status TEXT NOT NULL CHECK(status IN ('Parked','Departing','Landing','Airborne')),
                     altitude REAL NOT NULL CHECK(altitude >= 0),
                     timestamp TEXT NOT NULL
                 )
