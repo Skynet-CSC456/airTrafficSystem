@@ -1,6 +1,8 @@
 """Tower runway and clearance safety logic.
 
 REQ-TWR-003: check whether a clearance decision is approved.
+Legacy list helpers are offline previews; TowerService is the operational path.
+
 REQ-TWR-005: choose a safe runway and issue landing clearance only when it is valid.
 """
 
@@ -55,8 +57,8 @@ def runway_is_safe(runway: Mapping[str, object], aircraft: Mapping[str, object] 
         runway_mode = str(runway.get("mode", "landing")).lower()
         return runway_mode in allowed
     if aircraft_status in {"parked", "departing"}:
-        return True
-    return True
+        return str(runway.get("mode", "mixed")).lower() in {"departure", "mixed", "active"}
+    return False
 
 
 def find_safe_runway(runways: Sequence[Mapping[str, object]], aircraft: Mapping[str, object] | None = None):
@@ -105,46 +107,27 @@ def evaluate_runway_decision(runways: Sequence[Mapping[str, object]], aircraft: 
     if aircraft is None:
         raise ValueError("Aircraft state is required for clearance assignment")
     candidates = list(runways)
-    update_runway_availability(candidates)
     if runway_id is not None:
-        candidates = [runway for runway in candidates if str(runway.get("id")) == str(runway_id)]
-    chosen = find_safe_runway(candidates, aircraft)
-    if chosen is not None:
-        chosen["available"] = False
-        chosen["occupied_until"] = (datetime.now(timezone.utc) + timedelta(seconds=3)).isoformat()
-        return {
-            "aircraft_id": aircraft.get("id"),
-            "runway_id": chosen.get("id"),
-            "status": "cleared",
-            "safe": True,
-            "queue_position": None,
-            "occupied_until": chosen["occupied_until"],
-        }
-    return {
-        "aircraft_id": aircraft.get("id"),
-        "runway_id": None,
-        "status": "queued",
-        "safe": False,
-        "queue_position": queue_position if queue_position is not None else 1,
-        "occupied_until": None,
-    }
+        candidates = [r for r in candidates if str(r.get("id")) == str(runway_id)]
+    update_runway_availability(candidates)
+    if find_safe_runway(candidates, aircraft) is not None:
+        return {**assign_runway(candidates, aircraft), "queue_position": None}
+    return {"aircraft_id": aircraft.get("id"), "runway_id": None,
+            "status": "queued", "safe": False,
+            "queue_position": queue_position if queue_position is not None else 1,
+            "occupied_until": None}
 
 
 def publish_runway_decision(db, aircraft, runways, *, runway_id=None, queue_position=None):
-    """Persist a safe runway decision to the shared dashboard state."""
-    decision = evaluate_runway_decision(runways, aircraft, runway_id=runway_id, queue_position=queue_position)
-    if getattr(db, "upsert_shared_state", None) is None:
-        raise TypeError("Database must expose upsert_shared_state() for shared-state decisions")
-    db.upsert_shared_state(f"decision:{aircraft.get('id')}", decision, category="decision")
-    if decision.get("runway_id") is not None:
+    """Offline preview compatibility only; never allocates an operational runway."""
+    # Retained only for existing offline preview callers/tests. Operational callers
+    # must use TowerService; previews cannot overwrite a configured Tower airport.
+    with db.transaction():
+        exists = db.connection.execute("SELECT 1 FROM sqlite_master WHERE name='airports'").fetchone()
+        if exists and db.connection.execute("SELECT 1 FROM airports LIMIT 1").fetchone():
+            raise ValueError("Use TowerService for configured airports; this is an offline preview")
+        decision = evaluate_runway_decision(runways, aircraft, runway_id=runway_id, queue_position=queue_position)
+        db.upsert_shared_state(f"decision:{aircraft.get('id')}", decision, category="decision")
         for runway in runways:
-            if str(runway.get("id")) == str(decision["runway_id"]):
-                runway_payload = {
-                    "id": runway.get("id"),
-                    "available": bool(runway.get("available", True)),
-                    "mode": runway.get("mode", "landing"),
-                    "occupied_until": runway.get("occupied_until"),
-                }
-                db.upsert_shared_state(f"runway:{runway.get('id')}", runway_payload, category="runway")
-                break
-    return decision
+            db.upsert_shared_state(f"runway:{runway.get('id')}", dict(runway), category="runway")
+        return decision
