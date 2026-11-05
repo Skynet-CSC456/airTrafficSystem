@@ -9,6 +9,10 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from datetime import datetime, timedelta, timezone
 
+# How long a runway stays occupied after it is assigned. Raised from 3 to 10 seconds
+# so the occupied runway stays visible on the dashboard during presentations.
+RUNWAY_HOLD_SECONDS = 10
+
 
 def _coerce_datetime(value):
     if value is None:
@@ -23,7 +27,7 @@ def _coerce_datetime(value):
 def update_runway_availability(runways: Sequence[Mapping[str, object]], *, now=None):
     """Set runway availability based on occupied_until timestamps.
 
-    A runway is treated as occupied for 3 seconds after assignment. This keeps the
+    A runway is treated as occupied for RUNWAY_HOLD_SECONDS after assignment. This keeps the
     runway unavailable for other landing requests in that window while preserving
     safety-first assignment semantics.
     """
@@ -67,7 +71,7 @@ def find_safe_runway(runways: Sequence[Mapping[str, object]], aircraft: Mapping[
     return None
 
 
-def assign_runway(runways: Sequence[Mapping[str, object]], aircraft: Mapping[str, object] | None = None, *, runway_id: str | None = None, hold_seconds: int = 3):
+def assign_runway(runways: Sequence[Mapping[str, object]], aircraft: Mapping[str, object] | None = None, *, runway_id: str | None = None, hold_seconds: int = RUNWAY_HOLD_SECONDS):
     """Issue a landing clearance only when the chosen runway is safe.
 
     The selected runway is marked unavailable for `hold_seconds` seconds after the
@@ -111,7 +115,7 @@ def evaluate_runway_decision(runways: Sequence[Mapping[str, object]], aircraft: 
     chosen = find_safe_runway(candidates, aircraft)
     if chosen is not None:
         chosen["available"] = False
-        chosen["occupied_until"] = (datetime.now(timezone.utc) + timedelta(seconds=3)).isoformat()
+        chosen["occupied_until"] = (datetime.now(timezone.utc) + timedelta(seconds=RUNWAY_HOLD_SECONDS)).isoformat()
         return {
             "aircraft_id": aircraft.get("id"),
             "runway_id": chosen.get("id"),
