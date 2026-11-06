@@ -333,3 +333,103 @@ The smaller automatic test is preserved in both public-processor and bounded --o
 subprocess modes, with simulated Radar/Command consumers only in tests. Documentation
 paths, provenance and result counts are updated for this permanent worktree. These
 are restoration/validation changes, not a new message contract or production client.
+
+## Verified stationary occupancy extension
+
+`OccupancyTowerService` in `src/tower/occupancy.py` is the exact Tower extension
+used by the verified local integrated application. The file is copied unchanged;
+this update does not redesign the allocator, FIFO, public base interfaces, schema
+or version-1 message protocol. The base Tower modules and shared `src/db.py` match
+the previously published Tower commit byte-for-byte.
+
+The extension's public additions are `park_aircraft`, `occupancy`, occupancy-aware
+`request_runway`, `complete_request`, `cancel_request`, and
+`process_requests_with_occupancy`. A completed landing requires Radar's recorded
+Parked/0 state and retains stationary ownership. An owned departure transfers the
+same blocked runway into its clearance without exposing free capacity; completion
+releases it and promotes the oldest waiting arrival. Cancellation retains parked
+ownership. Adding R11 and explicitly promoting the queue provides additional
+capacity without moving existing owners.
+
+The processor accepts ordinary version-1 Radar messages without requiring a Command
+application or API intent records. It prepares only a bounded input snapshot, then
+delegates validation, durable acknowledgement and replay to the existing processor.
+Outgoing correlated decisions still target both Radar and Command. It does not
+implement Command receipts or Radar's response-application extension.
+
+Minimal shared dependencies added with this Tower update:
+
+- `src/shared/__init__.py`: shared Python package marker, also supporting the later
+  Command transaction adapter without moving subsystem code.
+- `src/shared/geometry.py`: the existing shared module whose `natural_key` is required
+  by Tower's numeric runway ordering. It also contains the unchanged illustrative
+  bounds/classification used by future integration consumers. Keeping this small
+  module intact preserves the tested import contract; it is not a second allocator
+  or an authoritative geographic airport model.
+
+No new `src/db.py` change is necessary: nested transactions and filtered messaging
+are already in the published Tower commit and are required to atomically preserve
+reservation/ownership/notification state. The extension currently uses Tower's
+protected `_promote`/`_save` hooks and repeated boundary validation; a future reviewed
+service-factory/native occupancy API can replace those hooks. That is a known
+extension limitation, not an additional change in this update.
+
+Two Tower-owned test modules cover 26 new cases: natural runway ordering, inclusive
+illustrative bounds, full-airport rejection, landing state checks, stationary
+ownership, owned departure, FIFO/R11, cancellation, bounded native message handling,
+malformed messages, replay, rollback and independent-connection persistence. They
+import existing Radar storage only as a public fixture and no Command, React or
+`src.integration` implementation. The original Tower tests remain unchanged.
+
+## Complete PR scope review
+
+The complete PR diff is evaluated against the merge base with current main, not
+only against the prior Tower commit. It contains Tower source/tests/requirements,
+Tower documentation, and necessary shared database/geometry support. There are no
+Radar implementation, Command implementation, React, Command scripts, cross-subsystem
+application/consumer/reset modules, databases or generated artifacts in that diff.
+
+The existing root `airplane_demo.py` changes replace its legacy local runway/timer
+allocation with public Tower service calls; batch and UTC compatibility are directly
+covered by Tower regression tests. Existing `messaging_demo.py` changes handle the
+Tower adapter's explicit ambiguous-airport error without crashing the shared menu;
+Tower menu regression tests exercise that path. These are retained compatibility
+adapters for existing repository entry points, not a new experimental presentation
+implementation or a runtime dependency of the React application. The existing root
+README changes document those Tower contracts and link this interface guide.
+
+Current main also has newer Radar Airborne support, Command Tk dashboard changes
+and manual-use-case scripts/tests. They are outside the Tower PR's three-dot change
+set and are preserved during separate current-main integration verification. A
+plain two-dot comparison shows main-only files as absent because this branch has
+not merged main; those absences are not proposed PR deletions. No history rewrite,
+force-push, main merge or unrelated cleanup is needed.
+
+## Occupancy publication verification
+
+| Executed local check | Result |
+| --- | --- |
+| Tower-only Python suite | 120 passed, 0 failed |
+| Complete standalone Tower-branch Python suite | 170 passed, 0 failed |
+| New occupancy/shared geometry cases | 26 passed, 0 failed |
+| Current main + proposed Tower delta + exact 43-file Command ZIP | 215 Python passed, 0 failed |
+| Reconstructed React / repository TypeScript | 62 / 2 passed, 0 failed |
+| Reconstructed frontend type checks and production build | Passed |
+| Tower requirement validator; reconstructed Radar/Tower/Command validators | Passed |
+| Isolated real HTTP scenarios | 30 assertions passed; 31 real message events |
+| Existing workflow YAML syntax and staged whitespace/scope checks | Passed |
+
+The HTTP run used a fresh external database and an OS-assigned loopback port. It
+exercised aircraft registration/update, landing/departure, FIFO positions/promotion,
+stationary ownership, completion/release, R11, actual Radar application and Command
+receipts, Reset Demo and creation after reset. Aircraft deletion was also checked
+through Radar's supported public store and observed via HTTP state; no HTTP DELETE
+endpoint was added. Built frontend assets matched the reconstructed production
+output. Newer main Radar/Command/manual-use-case files were hash-verified unchanged.
+
+Tests used Python 3.10.9, HTTP probes 3.11.4, and Node 22.12.0. These are local
+checks, not a claim of a remote GitHub CI result or a Python 3.12/Linux reproduction.
+The standalone Tower branch has no runtime dependency on the future Command files;
+the complete application adds Command's separately reviewed package afterward.
+The official detached working project was used read-only and its servers/databases
+were not used by these tests.
