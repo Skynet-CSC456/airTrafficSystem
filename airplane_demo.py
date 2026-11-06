@@ -10,36 +10,14 @@ import time
 from src.db import create_database
 from src.radar.aircraft import AircraftState, AircraftStore
 from src.radar.position_update import UPDATE_INTERVAL_SECONDS, update_aircraft_position
-from src.tower.clearance import publish_runway_decision, update_runway_availability
-
-
-DEFAULT_RUNWAYS = [
-    {'id': 'RWY 1', 'available': True, 'mode': 'landing'},
-    {'id': 'RWY 2', 'available': True, 'mode': 'landing'},
-]
+from src.tower.messaging import load_runways
+from src.tower.service import TowerService
+from uuid import uuid4
 
 
 def initialize_runways(db):
-    runways = []
-    for runway in DEFAULT_RUNWAYS:
-        payload = {
-            'id': runway['id'],
-            'available': bool(runway['available']),
-            'mode': runway.get('mode', 'landing'),
-            'occupied_until': runway.get('occupied_until'),
-        }
-        db.upsert_shared_state(f"runway:{runway['id']}", payload, category='runway')
-        runways.append(payload)
-    return runways
-
-
-def load_runways(db):
-    stored = db.list_shared_state(category='runway')
-    if not stored:
-        return initialize_runways(db)
-    runways = [row['payload'] for row in stored]
-    update_runway_availability(runways)
-    return runways
+    """Legacy demo entry point; inventory now comes from Tower's repository."""
+    return load_runways(db)
 
 
 def build_aircraft_ids(base_id: str, aircraft_count: int) -> list[str]:
@@ -61,7 +39,7 @@ def build_aircraft_ids(base_id: str, aircraft_count: int) -> list[str]:
 def _next_timestamp(previous: str | None, offset_seconds: int = 1) -> str:
     current = datetime.now(timezone.utc)
     if previous:
-        previous_dt = datetime.fromisoformat(previous).astimezone(timezone.utc)
+        previous_dt = datetime.strptime(previous, "%Y-%m-%dT%H:%M:%S").replace(tzinfo=timezone.utc)
         current = max(current, previous_dt + timedelta(seconds=offset_seconds))
     return current.strftime('%Y-%m-%dT%H:%M:%S')
 
@@ -83,7 +61,11 @@ def simulate_departure(store: AircraftStore, db, aircraft_id: str, *, updates: i
         state = store.create(AircraftState(aircraft_id, 40.6413, -73.7781, 'Parked', 0, _next_timestamp(None)))
 
     print('Initial state:', json.dumps(asdict(state)))
-    record_clearance_request(db, aircraft_id, 'departure', message=f'{aircraft_id} requested departure clearance')
+    runways = load_runways(db)
+    service = TowerService(db)
+    decision = service.request_runway(str(uuid4()), aircraft_id, runways[0]['airport_id'], 'departure')
+    if decision['outcome'] != 'cleared':
+        raise RuntimeError(f"Departure not cleared: {decision}")
     print(f'Tower: requesting departure clearance for {aircraft_id}')
     store.send_message(aircraft_id, 'Requesting departure clearance', to_tower=True)
     for message in store.receive_messages(for_tower=True, aircraft_id=aircraft_id):
@@ -105,70 +87,60 @@ def simulate_departure(store: AircraftStore, db, aircraft_id: str, *, updates: i
         )
         accepted = update_aircraft_position(store, asdict(state))
         print('Radar accepted:', accepted, json.dumps(asdict(store.get(aircraft_id))))
+    service.complete_request(decision['request_id'])
     return state
 
 
-def simulate_landing(store: AircraftStore, db, aircraft_id: str, *, landing_hold_seconds: float, queue_position: int | None = None):
+def _request_landing(store, db, aircraft_id):
     state = store.get(aircraft_id)
     if state is None:
         raise ValueError(f'Unknown aircraft {aircraft_id!r} for landing simulation')
-
-    state = replace(
-        state,
-        latitude=max(-90, state.latitude - 0.001),
-        longitude=max(-180, state.longitude - 0.001),
-        altitude=max(0, state.altitude - 40),
-        status='Landing',
-        timestamp=_next_timestamp(state.timestamp),
-    )
-    accepted = update_aircraft_position(store, asdict(state))
-    print(f'Radar accepted landing update for {aircraft_id}:', accepted, json.dumps(asdict(store.get(aircraft_id))))
-    if not accepted:
-        return False
-
-    record_clearance_request(db, aircraft_id, 'landing', message=f'{aircraft_id} requested landing clearance')
-    store.send_message(aircraft_id, 'Requesting landing clearance', to_tower=True)
-    for message in store.receive_messages(for_tower=True, aircraft_id=aircraft_id):
-        print('Tower received:', message['content'])
-
     runways = load_runways(db)
-    decision = publish_runway_decision(
-        db,
-        {'id': aircraft_id, 'status': 'Landing'},
-        runways,
-        queue_position=queue_position,
-    )
-    if decision.get('status') == 'queued':
-        print(f'Tower queued {aircraft_id}: waiting for runway. Queue position={decision.get("queue_position")}.')
-        return False
+    state = replace(state, latitude=max(-90, state.latitude - 0.001),
+                    longitude=max(-180, state.longitude - 0.001),
+                    altitude=max(1, state.altitude - 40), status='Landing',
+                    timestamp=_next_timestamp(state.timestamp))
+    accepted = update_aircraft_position(store, asdict(state))
+    print(f'Radar accepted landing update for {aircraft_id}:', accepted)
+    if not accepted:
+        raise ValueError('Stale landing simulation update')
+    service = TowerService(db)
+    decision = service.request_runway(str(uuid4()), aircraft_id, runways[0]['airport_id'], 'landing')
     print(f'Landing decision for {aircraft_id}:', decision)
+    return decision
+
+
+def _complete_landing(store, db, decision, landing_hold_seconds):
     if landing_hold_seconds > 0:
         time.sleep(landing_hold_seconds)
-    refreshed_runways = load_runways(db)
-    for runway in refreshed_runways:
-        if str(runway.get('id')) == str(decision.get('runway_id')):
-            runway['available'] = True
-            runway['occupied_until'] = None
-            db.upsert_shared_state(f"runway:{runway.get('id')}", runway, category='runway')
-            break
-    state = replace(state, status='Parked', altitude=0, timestamp=_next_timestamp(state.timestamp))
-    update_aircraft_position(store, asdict(state))
-    print(f'{aircraft_id} has landed and runway is available again.')
+    # Flight completion is simulated; reservation release/promotion is real Tower logic.
+    state = store.get(decision['aircraft_id'])
+    update_aircraft_position(store, asdict(replace(state, status='Parked', altitude=0,
+                                                  timestamp=_next_timestamp(state.timestamp))))
+    TowerService(db).complete_request(decision['request_id'])
+    print(f"{state.id} has landed and runway is available again.")
+
+
+def simulate_landing(store, db, aircraft_id, *, landing_hold_seconds, queue_position=None):
+    """Legacy single landing demo; queue_position is now computed by Tower."""
+    decision = _request_landing(store, db, aircraft_id)
+    if decision['outcome'] != 'cleared':
+        return False
+    _complete_landing(store, db, decision, landing_hold_seconds)
     return True
 
 
-def fabricate_landing_queue(store: AircraftStore, db, aircraft_ids: list[str], *, landing_hold_seconds: float) -> list[str]:
-    """Simulate multiple aircraft requesting landing in sequence and allow queue waiting when no runway is free."""
+def fabricate_landing_queue(store, db, aircraft_ids, *, landing_hold_seconds):
+    """Submit the batch before completing flights; Tower owns the persistent FIFO."""
+    requests = [_request_landing(store, db, aircraft_id) for aircraft_id in aircraft_ids]
+    service = TowerService(db)
     completed = []
-    queue = list(enumerate(aircraft_ids, start=1))
-    while queue:
-        index, aircraft_id = queue.pop(0)
-        landing_result = simulate_landing(store, db, aircraft_id, landing_hold_seconds=landing_hold_seconds, queue_position=index)
-        if landing_result:
-            completed.append(aircraft_id)
-        else:
-            queue.append((index, aircraft_id))
-            time.sleep(1)
+    for request in requests:
+        decision = service.get_decision(request['request_id'])
+        if decision['outcome'] != 'cleared':
+            raise RuntimeError('Demo has no completable reservation; inspect Tower queue/configuration')
+        _complete_landing(store, db, decision, landing_hold_seconds)
+        completed.append(decision['aircraft_id'])
     return completed
 
 
@@ -221,7 +193,7 @@ def main():
             print(f'All {len(landed)} aircraft have completed departure and landing. Simulation complete.')
         else:
             print(f'Completed aircraft: {completed_departures}')
-            print(f'All {len(completed_departures)} aircraft have completed departure and landing. Simulation complete.')
+            print(f'All {len(completed_departures)} aircraft have completed departure. Simulation complete.')
     finally:
         db.close()
 
