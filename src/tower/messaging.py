@@ -8,9 +8,9 @@ from __future__ import annotations
 
 from src.db import Message, MessageDatabase, Team
 from src.radar.aircraft import AircraftState, AircraftStore
+from src.tower._request_protocol import parse_request_metadata, send_to_clients
 from src.tower.airport import AirportDatabase, current_timestamp
 from src.tower.service import TowerService
-from datetime import datetime, timezone
 from uuid import uuid4
 
 FUNCTION_MESSAGE_TYPE = "function"
@@ -120,14 +120,7 @@ def process_requests(db: MessageDatabase, *, limit: int = 100) -> list[dict]:
             message = db.receive_messages(Team.TOWER, message_id=candidate[0], limit=1)[0]
             metadata = message.metadata
             try:
-                if not isinstance(metadata, dict) or type(metadata.get("schema_version")) is not int or metadata["schema_version"] != 1:
-                    raise ValueError("Expected schema_version 1 metadata object")
-                moment = metadata.get("timestamp")
-                if not isinstance(moment, str):
-                    raise ValueError("Request timestamp must be timezone-aware UTC")
-                moment = datetime.fromisoformat(moment.replace("Z", "+00:00"))
-                if moment.tzinfo is None or moment.utcoffset() != timezone.utc.utcoffset(moment):
-                    raise ValueError("Request timestamp must be timezone-aware UTC")
+                metadata = parse_request_metadata(metadata)
                 result = service.request_runway(metadata.get("request_id"),metadata.get("aircraft_id"),
                     metadata.get("airport_id"),metadata.get("operation"),runway_id=metadata.get("runway_id"))
             except (ValueError, TypeError) as exc:
@@ -139,9 +132,8 @@ def process_requests(db: MessageDatabase, *, limit: int = 100) -> list[dict]:
                           "operation":fields.get("operation"),"outcome":"rejected","status":"rejected",
                           "runway_id":None,"queue_position":None,"reason":str(exc),
                           "timestamp":current_timestamp(),"source_message_id":message.id}
-                for recipient in (Team.RADAR, Team.COMMAND):
-                    db.send_message(Team.TOWER,recipient,"Rejected malformed runway request",
-                                    message_type="runway_response",metadata=result)
+                send_to_clients(db, "Rejected malformed runway request",
+                                message_type="runway_response", metadata=result)
             db.connection.execute("INSERT INTO tower_processed_messages VALUES (?,?)",
                                   (message.id,current_timestamp()))
             db.connection.execute("UPDATE messages SET read_at=CURRENT_TIMESTAMP WHERE id=?", (message.id,))

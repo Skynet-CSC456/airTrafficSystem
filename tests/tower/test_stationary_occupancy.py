@@ -182,16 +182,33 @@ def test_native_radar_message_clears_owned_departure_and_notifies_both_clients(s
     assert db.connection.execute('SELECT COUNT(*) FROM messages').fetchone()[0] == before
 
 
-def test_malformed_native_message_has_no_occupancy_side_effects(system):
+@pytest.mark.parametrize(('overrides', 'reason'), [
+    ({'schema_version': 9}, 'Expected schema_version 1 metadata object'),
+    ({'schema_version': True}, 'Expected schema_version 1 metadata object'),
+    ({'timestamp': None}, 'Request timestamp must be timezone-aware UTC'),
+    ({'timestamp': '2026-11-05T15:00:00+01:00'}, 'Request timestamp must be timezone-aware UTC'),
+    ({'runway_id': ' R1'}, 'Runway ID must be a nonempty string without surrounding whitespace'),
+])
+def test_malformed_native_message_has_no_occupancy_side_effects(system, overrides, reason):
     db, tower, store = system
     original = park(tower, store)
-    message_id = send(db, 'P', 'bad', schema_version=9)
-    process_requests_with_occupancy(db)
+    message_id = send(db, 'P', 'bad', **overrides)
+    result, = process_requests_with_occupancy(db)
+    assert result['outcome'] == 'rejected'
+    assert result['reason'] == reason
+    assert result['source_message_id'] == message_id
+    for team in (Team.RADAR, Team.COMMAND):
+        reply, = db.receive_messages(team)
+        assert reply.message_type == 'runway_response'
+        assert reply.content == 'Rejected malformed runway request'
+        assert reply.metadata == result
     assert tower.occupancy() == [original]
     assert tower.get_decision('bad') is None
     assert not tower.airports.list_runways('JFK')[0]['available']
     assert db.connection.execute('SELECT 1 FROM tower_processed_messages WHERE message_id=?',
                                  (message_id,)).fetchone()
+    assert db.receive_messages(Team.TOWER, unread_only=True) == []
+    assert process_requests_with_occupancy(db) == []
 
 
 def test_processor_prepares_only_its_bounded_input_snapshot(system):

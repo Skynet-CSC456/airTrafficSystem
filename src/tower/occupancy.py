@@ -7,8 +7,8 @@ The protected _promote/_save hooks need a supported upstream extension point bef
 integration into main. No direct writes to Tower reservation tables occur here.
 """
 import json
-from datetime import datetime, timezone
 from src.db import Team
+from src.tower._request_protocol import parse_request_metadata
 from src.tower.service import TowerService
 from src.tower.airport import AirportDatabase
 from src.shared.geometry import natural_key
@@ -133,9 +133,8 @@ def process_requests_with_occupancy(db, *, limit=100):
 
     Same version-1 protocol, including independent Radar producers without API
     intent records. The existing processor still owns validation, acknowledgement
-    and replay. Minimal envelope checks prevent extension side effects on malformed
-    messages before that processor emits its standard rejection. Upstream should
-    inject the service factory to remove this boundary-validation repetition.
+    and replay. Use the same envelope parser and check that the fields can be
+    used by the occupancy preparation pass before calling the allocator.
     """
     if isinstance(limit,bool) or not isinstance(limit,int) or limit<1:
         return process_requests(db,limit=limit)  # delegate the original error
@@ -145,18 +144,15 @@ def process_requests_with_occupancy(db, *, limit=100):
     selected = {m.id for m in messages if m.id not in processed}
     selected = set(sorted(selected)[:limit])
     for message in messages:
-        metadata = message.metadata
-        if not isinstance(metadata,dict) or type(metadata.get('schema_version')) is not int or metadata['schema_version']!=1:
+        try:
+            metadata = parse_request_metadata(message.metadata)
+        except ValueError:
             continue
         if metadata.get('operation') not in ('landing','departure'): continue
-        try:
-            moment = datetime.fromisoformat(metadata['timestamp'].replace('Z','+00:00'))
-            if moment.tzinfo is None or moment.utcoffset()!=timezone.utc.utcoffset(moment): continue
-            if not all(isinstance(metadata.get(k),str) and metadata[k].strip() and metadata[k]==metadata[k].strip()
-                       for k in ('request_id','aircraft_id','airport_id')): continue
-            if metadata.get('runway_id') is not None and (not isinstance(metadata['runway_id'],str)
-                    or not metadata['runway_id'].strip() or metadata['runway_id']!=metadata['runway_id'].strip()): continue
-        except (ValueError,TypeError,KeyError,AttributeError):
+        if not all(isinstance(metadata.get(k),str) and metadata[k].strip() and metadata[k]==metadata[k].strip()
+                   for k in ('request_id','aircraft_id','airport_id')): continue
+        if metadata.get('runway_id') is not None and (not isinstance(metadata['runway_id'],str)
+                or not metadata['runway_id'].strip() or metadata['runway_id']!=metadata['runway_id'].strip()):
             continue
         decision = tower.get_decision(metadata['request_id'])
         if message.id not in selected and not (decision and decision['outcome']=='queued' and metadata['operation']=='departure'): continue

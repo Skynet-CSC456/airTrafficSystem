@@ -5,10 +5,9 @@ outgoing messages commit together. Radar remains the aircraft-state owner.
 """
 from __future__ import annotations
 
-import json
-
-from src.db import Team
 from src.radar.aircraft import AircraftStore
+from src.tower._request_protocol import publish_decision
+from src.tower._request_store import RequestStore
 from src.tower.airport import AirportDatabase, current_timestamp, _identifier
 from src.tower.clearance import find_safe_runway
 
@@ -22,12 +21,10 @@ class TowerService:
         self._db = db
         self.airports = AirportDatabase(db)
         self._aircraft = AircraftStore(db)
-        self._connection = db.connection
+        self._requests = RequestStore(db.connection)
 
     def get_decision(self, request_id):
-        row = self._connection.execute("SELECT response FROM tower_requests WHERE request_id=?",
-                                       (request_id,)).fetchone()
-        return json.loads(row[0]) if row and row[0] else None
+        return self._requests.decision(request_id)
 
     def request_runway(self, request_id, aircraft_id, airport_id, operation, *, runway_id=None):
         """Submit once; replay returns latest decision without repeating side effects.
@@ -46,7 +43,7 @@ class TowerService:
         if not isinstance(operation, str):
             raise ValueError("Operation must be landing or departure")
         with self._db.transaction():
-            old = self._connection.execute("SELECT * FROM tower_requests WHERE request_id=?", (request_id,)).fetchone()
+            old = self._requests.get(request_id)
             if old:
                 signature = (old["aircraft_id"],old["airport_id"],old["operation"],old["preferred_runway"],bool(old["legacy"]))
                 if signature != (aircraft_id,airport_id,operation,runway_id,legacy):
@@ -54,15 +51,13 @@ class TowerService:
                 return self.get_decision(request_id)
             # Validate before insert so the unique active-aircraft index stays a safety net.
             reason = self._validation_error(aircraft_id, airport_id, operation, runway_id)
-            duplicate = self._connection.execute("""SELECT request_id FROM tower_requests
-                WHERE aircraft_id=? AND outcome IN ('queued','cleared')""", (aircraft_id,)).fetchone()
-            if duplicate:
-                reason = f"Aircraft already has active request {duplicate[0]}"
-            cursor = self._connection.execute("""INSERT INTO tower_requests
-                (request_id,aircraft_id,airport_id,operation,preferred_runway,outcome,created_at,legacy)
-                VALUES (?,?,?,?,?,?,?,?)""", (request_id,aircraft_id,airport_id,operation,runway_id,
-                                             "rejected" if reason else "queued",current_timestamp(),int(legacy)))
-            row = self._connection.execute("SELECT * FROM tower_requests WHERE sequence=?", (cursor.lastrowid,)).fetchone()
+            active_request = self._requests.active_request_id(aircraft_id)
+            if active_request is not None:
+                reason = f"Aircraft already has active request {active_request}"
+            row = self._requests.insert(
+                request_id, aircraft_id, airport_id, operation, runway_id,
+                outcome="rejected" if reason else "queued", timestamp=current_timestamp(), legacy=legacy,
+            )
             if reason:
                 return self._save(row, "rejected", reason=reason)
             self._promote(airport_id)
@@ -97,9 +92,7 @@ class TowerService:
     def _save(self, row, outcome, *, runway_id=None, reason=None):
         position = None
         if outcome == "queued":
-            position = self._connection.execute("""SELECT COUNT(*) FROM tower_requests
-                WHERE airport_id=? AND outcome='queued' AND sequence<=?""",
-                (row["airport_id"],row["sequence"])).fetchone()[0]
+            position = self._requests.queue_position(row["airport_id"], row["sequence"])
             previous = self.get_decision(row["request_id"])
             if previous and previous["outcome"] == "queued" and previous["queue_position"] == position:
                 return previous
@@ -108,29 +101,18 @@ class TowerService:
                     "operation":row["operation"],"outcome":outcome,"status":outcome,
                     "runway_id":runway_id,"queue_position":position,"reason":reason,
                     "timestamp":current_timestamp(),"safe":outcome=="cleared","occupied_until":None}
-        self._connection.execute("UPDATE tower_requests SET outcome=?,runway_id=? WHERE request_id=?",
-                                 (outcome,runway_id,row["request_id"]))
-        message_type = "runway_completed" if outcome == "completed" else "runway_response"
-        metadata = dict(response)
-        if row["legacy"] and outcome == "cleared":
-            message_type = "function"
-            metadata["function"] = "assign_runway"
-        response["message_ids"] = {team.value:self._db.send_message(
-            Team.TOWER, team, f"{row['operation']} {outcome}: {row['aircraft_id']}",
-            message_type=message_type, metadata=metadata) for team in (Team.RADAR,Team.COMMAND)}
-        self._connection.execute("UPDATE tower_requests SET response=? WHERE request_id=?",
-                                 (json.dumps(response),row["request_id"]))
+        self._requests.set_outcome(row["request_id"], outcome, runway_id)
+        response["message_ids"] = publish_decision(self._db, response, legacy=row["legacy"])
+        self._requests.save_response(row["request_id"], response)
         self._db.upsert_shared_state(f"tower_request:{row['request_id']}", response, category="tower_request")
-        active = self._connection.execute("""SELECT request_id FROM tower_requests
-            WHERE aircraft_id=? AND outcome IN ('queued','cleared')""", (row["aircraft_id"],)).fetchone()
-        if active is None or active[0] == row["request_id"]:
+        active = self._requests.active_request_id(row["aircraft_id"])
+        if active is None or active == row["request_id"]:
             self._db.upsert_shared_state(f"decision:{row['aircraft_id']}", response, category="decision")
         return response
 
     def _promote(self, airport_id):
         # Strict FIFO per airport; an unavailable preferred runway blocks followers.
-        rows = self._connection.execute("""SELECT * FROM tower_requests
-            WHERE airport_id=? AND outcome='queued' ORDER BY sequence""", (airport_id,)).fetchall()
+        rows = self._requests.queued_rows(airport_id)
         blocked = False
         for row in rows:
             reason = self._validation_error(row["aircraft_id"], airport_id, row["operation"], row["preferred_runway"])
@@ -160,7 +142,7 @@ class TowerService:
     def complete_request(self, request_id):
         """Release the owned reservation and promote FIFO, atomically and idempotently."""
         with self._db.transaction():
-            row = self._connection.execute("SELECT * FROM tower_requests WHERE request_id=?", (request_id,)).fetchone()
+            row = self._requests.get(request_id)
             if row is None:
                 raise KeyError(request_id)
             if row["outcome"] == "completed":
@@ -175,7 +157,7 @@ class TowerService:
         """Cancel a queued/cleared request safely; release and promote atomically."""
         _identifier(reason, "Cancellation reason")
         with self._db.transaction():
-            row = self._connection.execute("SELECT * FROM tower_requests WHERE request_id=?", (request_id,)).fetchone()
+            row = self._requests.get(request_id)
             if row is None:
                 raise KeyError(request_id)
             if row["outcome"] in ("rejected", "completed"):
@@ -194,12 +176,10 @@ class TowerService:
 
     def list_queue(self, airport_id):
         with self._db.transaction():
-            return [json.loads(r[0]) for r in self._connection.execute("""SELECT response FROM tower_requests
-                WHERE airport_id=? AND outcome='queued' ORDER BY sequence""", (airport_id,))]
+            return self._requests.queued_decisions(airport_id)
 
     def snapshot(self):
         """Versioned read model; Command must render operation/outcome explicitly."""
         with self._db.transaction():
             return {"schema_version":1,"airports":self.airports.list_airports(),
-                    "requests":[json.loads(r[0]) for r in self._connection.execute(
-                        "SELECT response FROM tower_requests ORDER BY sequence")]}
+                    "requests":self._requests.decisions()}
