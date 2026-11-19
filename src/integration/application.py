@@ -93,6 +93,8 @@ class Application:
                 raise InputError('Aircraft ID already exists', 409)
             state = AircraftState(**payload, timestamp=next_timestamp())
             validate_creation(state)
+            if state.status == 'Airborne' and state.altitude <= 0:
+                raise InputError('Airborne requires positive altitude')
             tower = TowerService(db)
             with atomic_radar(db,store):
                 store.create(state)
