@@ -1,3 +1,7 @@
+"""Standalone offline canvas preview (REQ-TWR-004), not operational runway state.
+
+Preserved for its interactive example and tests; use TowerService for real decisions.
+"""
 # REQ-TWR-004: AirportUI implementation
 import tkinter as tk
 

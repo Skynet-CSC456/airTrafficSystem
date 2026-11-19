@@ -30,6 +30,38 @@ def test_only_airborne_aircraft_are_listed(db):
     assert [a.id for a in list_airborne_aircraft(db)] == ["AC001", "AC002"]
 
 
+@pytest.mark.parametrize("initialize_aircraft", [False, True])
+def test_airborne_listing_does_not_commit_managed_transaction(initialize_aircraft):
+    database = create_database(":memory:")
+    try:
+        if initialize_aircraft:
+            AircraftStore(database).create(AircraftState(
+                "AIR", 40.0, -73.0, "Landing", 100, "2030-01-01T00:00:00"
+            ))
+        with pytest.raises(RuntimeError, match="abort transaction"):
+            with database.transaction():
+                database.send_message(Team.TOWER, Team.RADAR, "must roll back")
+                assert [a.id for a in list_airborne_aircraft(database)] == (
+                    ["AIR"] if initialize_aircraft else []
+                )
+                raise RuntimeError("abort transaction")
+        assert database.receive_messages(Team.RADAR) == []
+    finally:
+        database.close()
+
+
+def test_airborne_listing_outside_transaction_on_fresh_database():
+    database = create_database(":memory:")
+    try:
+        assert list_airborne_aircraft(database) == []
+        assert not database.connection.in_transaction
+        assert database.connection.execute(
+            "SELECT name FROM sqlite_master WHERE name='aircraft'"
+        ).fetchone() is None
+    finally:
+        database.close()
+
+
 def test_assignment_sends_function_message_to_radar_and_command(db):
     # REQ-TWR-006
     decision = assign_runway_to_aircraft(db, "AC001", "RWY 2")
@@ -127,3 +159,36 @@ def test_demo_reports_when_no_aircraft_in_the_air(monkeypatch, capsys):
         assert empty.receive_messages(Team.RADAR) == []
     finally:
         empty.close()
+
+
+def test_multi_airport_menu_reports_ambiguity_and_continues(tmp_path, monkeypatch, capsys):
+    from src.tower.airport import AirportDatabase
+
+    path = str(tmp_path / "multi-airport.db")
+    database = create_database(path)
+    try:
+        airports = AirportDatabase(database)
+        airports.create_airport("JFK", 22000, 40.6413, -73.7781, ["R1"])
+        airports.create_airport("LGA", 10000, 40.77, -73.87, ["R2"])
+        AircraftStore(database).create(AircraftState(
+            "AIR", 40.0, -73.0, "Landing", 100, "2030-01-01T00:00:00"
+        ))
+    finally:
+        database.close()
+
+    monkeypatch.setenv("SQLITE_DATABASE", path)
+    # Failed assignment returns to the main menu, which can still send text.
+    _feed_inputs(monkeypatch, ["tower", "1", "2", "1", "1", "1", "radar", "still running", "q"])
+    messaging_demo.main()
+    output = capsys.readouterr().out
+    assert "Could not assign runway: Multiple airports configured" in output
+    assert "explicit airport_id" in output
+    assert "Message sent successfully!" in output
+
+    reopened = create_database(path)
+    try:
+        assert reopened.connection.execute("SELECT COUNT(*) FROM tower_requests").fetchone()[0] == 0
+        assert [m.content for m in reopened.receive_messages(Team.RADAR)] == ["still running"]
+        assert reopened.receive_messages(Team.COMMAND) == []
+    finally:
+        reopened.close()

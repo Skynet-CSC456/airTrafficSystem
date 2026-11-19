@@ -17,3 +17,6 @@
 | REQ-TWR-005 | Tower   | Safe runway assignment and landing clearance          | src/tower/clearance.py                       | tests/tower/test_clearance_safety.py            | N/A     |
 | REQ-TWR-006 | Tower   | Assign runway to airborne aircraft via function message | src/tower/messaging.py:assign_runway_to_aircraft | tests/tower/test_assign_runway.py          | N/A     |
 | REQ-CMD-004 | Command | Unified dashboard with normal/degraded system state   | src/command/dashboard.py                     | tests/command/test_dashboard.py                | N/A     |
+| REQ-TWR-007 | Tower | Authoritative Airport and runway CRUD | src/tower/airport.py | tests/tower/test_airport.py; tests/tower/test_service.py | N/A |
+| REQ-TWR-008 | Tower | Atomic request lifecycle and persistent FIFO | src/tower/service.py | tests/tower/test_service.py | N/A |
+| REQ-TWR-009 | Tower | Versioned Radar request processing and atomic responses | src/tower/messaging.py | tests/tower/test_service.py | N/A |

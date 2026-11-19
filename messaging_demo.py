@@ -61,16 +61,15 @@ def assign_runway_function(db):
         )
     ]
 
-    runways = load_runways(db)
-    print(f"\nRunways for {chosen.id}:")
-    runway = runways[
-        choose_option(
-            "Select a runway: ",
-            [f"{r['id']}  ({'available' if r.get('available') else 'occupied'})" for r in runways],
-        )
-    ]
-
     try:
+        runways = load_runways(db)
+        print(f"\nRunways for {chosen.id}:")
+        runway = runways[
+            choose_option(
+                "Select a runway: ",
+                [f"{r['id']}  ({'available' if r.get('available') else 'occupied'})" for r in runways],
+            )
+        ]
         decision = assign_runway_to_aircraft(db, chosen.id, runway["id"])
     except ValueError as error:
         print(f"\nCould not assign runway: {error}")

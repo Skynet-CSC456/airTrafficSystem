@@ -56,7 +56,8 @@ with Tower:
 
 The default interval is five seconds (REQ-RAD-003). The demo uses
 `data/airplane_demo.db`, separate from the main database. Set `--database` and
-`--id` to choose a database and aircraft. Repeated runs resume the existing state.
+`--id` to choose a database and aircraft. Aircraft rows persist across runs. A new departure requires a Parked aircraft at
+altitude zero; complete its landing or use a fresh demo database before another departure.
 Each accepted update replaces the same aircraft row; no position history is kept.
 Altitude is meters above ground and timestamps are UTC `YYYY-MM-DDTHH:MM:SS`.
 Motion is a simple coordinate increment for demonstration only.
@@ -66,3 +67,11 @@ addressed aircraft/Tower messages. `src/radar/position_update.py` validates comp
 state payloads and applies only newer updates to registered aircraft. The local
 prototype calls Radar directly; it does not yet provide a network API or broker.
 Deleting an aircraft also deletes its aircraft-specific messages.
+
+## Complete Tower subsystem (local integration)
+
+See [Tower interfaces and modularity review](docs/tower-integration.md) for Airport
+CRUD, request/response examples, atomic FIFO allocation, explicit completion,
+worker startup and remaining Radar/Command consumer work. Run Tower against an
+explicit temporary/test database until schema and contracts are agreed by teams.
+No React frontend or automatic Radar/Command consumers are supplied here.

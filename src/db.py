@@ -14,6 +14,7 @@ import json
 import os
 import sqlite3
 import stat
+from contextlib import closing, contextmanager, nullcontext
 from dataclasses import dataclass
 from datetime import datetime
 from enum import Enum
@@ -90,24 +91,47 @@ class MessageDatabase:
 
     def __init__(self, connection: sqlite3.Connection):
         self.connection = connection
+        self._transaction_depth = 0
         self.connection.execute("PRAGMA foreign_keys = ON")
+
+    @contextmanager
+    def transaction(self):
+        """Atomic write unit; nested calls use savepoints, never commit the caller.
+
+        One connection per worker/thread. An unrelated open transaction is rejected
+        rather than silently committed. BEGIN IMMEDIATE serializes read/modify/write.
+        """
+        nested = self._transaction_depth > 0
+        savepoint = f"atc_{self._transaction_depth}"
+        if not nested and self.connection.in_transaction:
+            raise RuntimeError("Finish the existing transaction before starting an ATC transaction")
+        self.connection.execute(f"SAVEPOINT {savepoint}" if nested else "BEGIN IMMEDIATE")
+        self._transaction_depth += 1
+        try:
+            yield
+            if nested:
+                self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+            else:
+                self.connection.commit()
+        except BaseException:
+            if nested:
+                self.connection.execute(f"ROLLBACK TO SAVEPOINT {savepoint}")
+                self.connection.execute(f"RELEASE SAVEPOINT {savepoint}")
+            else:
+                self.connection.rollback()
+            raise
+        finally:
+            self._transaction_depth -= 1
 
     def initialize_schema(self) -> None:
         """Create the schema and register Radar, Tower, and Command."""
-        cursor = self.connection.cursor()
-        try:
+        with self.transaction():
             for statement in SCHEMA_SQL:
-                cursor.execute(statement)
-            cursor.executemany(
+                self.connection.execute(statement)
+            self.connection.executemany(
                 "INSERT OR IGNORE INTO teams (name) VALUES (?)",
                 [(team,) for team in _TEAM_VALUES],
             )
-            self.connection.commit()
-        except Exception:
-            self.connection.rollback()
-            raise
-        finally:
-            cursor.close()
 
     def send_message(
         self,
@@ -128,8 +152,7 @@ class MessageDatabase:
         if not message_type or not message_type.strip():
             raise ValueError("Message type cannot be empty")
 
-        cursor = self.connection.cursor()
-        try:
+        with self.transaction(), closing(self.connection.cursor()) as cursor:
             cursor.execute(
                 """
                 INSERT INTO messages
@@ -144,13 +167,7 @@ class MessageDatabase:
                     json.dumps(metadata) if metadata is not None else None,
                 ),
             )
-            self.connection.commit()
             return int(cursor.lastrowid)
-        except Exception:
-            self.connection.rollback()
-            raise
-        finally:
-            cursor.close()
 
     def receive_messages(
         self,
@@ -159,6 +176,9 @@ class MessageDatabase:
         unread_only: bool = False,
         limit: int = 100,
         mark_as_read: bool = False,
+        sender: Team | str | None = None,
+        message_type: str | None = None,
+        message_id: int | None = None,
     ) -> list[Message]:
         """Return messages addressed to ``recipient``, oldest first.
 
@@ -170,8 +190,7 @@ class MessageDatabase:
         if limit < 1:
             raise ValueError("limit must be greater than zero")
 
-        cursor = self.connection.cursor()
-        try:
+        with (self.transaction() if mark_as_read else nullcontext()), closing(self.connection.cursor()) as cursor:
             query = """
                 SELECT id, sender_team, recipient_team, content, message_type,
                        metadata, created_at, read_at
@@ -181,6 +200,15 @@ class MessageDatabase:
             parameters: list[Any] = [recipient_value]
             if unread_only:
                 query += " AND read_at IS NULL"
+            if sender is not None:
+                query += " AND sender_team = ?"
+                parameters.append(_team_value(sender))
+            if message_type is not None:
+                query += " AND message_type = ?"
+                parameters.append(message_type)
+            if message_id is not None:
+                query += " AND id = ?"
+                parameters.append(message_id)
             query += " ORDER BY created_at ASC, id ASC LIMIT ?"
             parameters.append(limit)
             cursor.execute(query, parameters)
@@ -195,21 +223,14 @@ class MessageDatabase:
                     f"WHERE recipient_team = ? AND id IN ({placeholders}) AND read_at IS NULL",
                     [recipient_value, *ids],
                 )
-                self.connection.commit()
             return messages
-        except Exception:
-            self.connection.rollback()
-            raise
-        finally:
-            cursor.close()
 
     def upsert_shared_state(self, key: str, payload: Any, *, category: str = "system") -> dict[str, Any]:
         """Persist a JSON-serializable shared-state payload and return it."""
         if not isinstance(key, str) or not key.strip():
             raise ValueError("Shared-state key cannot be empty")
         serialized = json.dumps(payload)
-        cursor = self.connection.cursor()
-        try:
+        with self.transaction(), closing(self.connection.cursor()) as cursor:
             cursor.execute(
                 """
                 INSERT INTO shared_state (key, category, payload, updated_at)
@@ -221,13 +242,7 @@ class MessageDatabase:
                 """,
                 (key.strip(), category.strip() or "system", serialized),
             )
-            self.connection.commit()
             return self.get_shared_state(key)
-        except Exception:
-            self.connection.rollback()
-            raise
-        finally:
-            cursor.close()
 
     def get_shared_state(self, key: str) -> dict[str, Any] | None:
         """Return the latest payload for a shared-state key or None if missing."""
