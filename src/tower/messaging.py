@@ -74,13 +74,14 @@ def load_runways(db: MessageDatabase) -> list[dict]:
         return airports.list_runways(_legacy_airport(airports))
 
 
-def assign_runway_to_aircraft(db: MessageDatabase, aircraft_id: str, runway_id: str) -> dict:
+def assign_runway_to_aircraft(db: MessageDatabase, aircraft_id: str, runway_id: str,
+                              *, service_factory=TowerService) -> dict:
     """REQ-TWR-006 legacy menu: atomic manual landing assignment/function messages.
 
     Busy or invalid selection raises ValueError without decision/message writes.
     Unlike the old timer, reservations now require explicit completion.
     """
-    service = TowerService(db)
+    service = service_factory(db)
     store = AircraftStore(db)
     with db.transaction():
         aircraft = store.get(aircraft_id)
@@ -98,7 +99,7 @@ def assign_runway_to_aircraft(db: MessageDatabase, aircraft_id: str, runway_id: 
         return result
 
 
-def process_requests(db: MessageDatabase, *, limit: int = 100) -> list[dict]:
+def process_requests(db: MessageDatabase, *, limit: int = 100, service_factory=TowerService) -> list[dict]:
     """REQ-TWR-009: process only Radar runway_request messages, one atomic unit each.
 
     Text/other senders are untouched. Malformed envelopes receive a correlated
@@ -107,7 +108,7 @@ def process_requests(db: MessageDatabase, *, limit: int = 100) -> list[dict]:
     """
     if isinstance(limit, bool) or not isinstance(limit, int) or limit < 1:
         raise ValueError("limit must be a positive integer")
-    service = TowerService(db)
+    service = service_factory(db)
     results = []
     for _ in range(limit):
         with db.transaction():

@@ -15,13 +15,15 @@ from src.tower.clearance import find_safe_runway
 class TowerService:
     """Public synchronous boundary for Radar, Command and future HTTP adapters."""
 
+    _request_store_class = RequestStore
+
     def __init__(self, db):
         if db.connection.in_transaction:
             raise RuntimeError("Construct TowerService before opening a transaction")
         self._db = db
         self.airports = AirportDatabase(db)
         self._aircraft = AircraftStore(db)
-        self._requests = RequestStore(db.connection)
+        self._requests = self._request_store_class(db.connection)
 
     def get_decision(self, request_id):
         return self._requests.decision(request_id)
