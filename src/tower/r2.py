@@ -170,6 +170,9 @@ class TowerR2Service(OccupancyTowerService):
                             continue
                         instruction = {**target, 'aircraft_id': moving.id,
                                        'observed_at': moving.timestamp,
+                                       'observed_position': {'latitude': moving.latitude,
+                                                             'longitude': moving.longitude},
+                                       'aircraft_ids': payload['aircraft_ids'],
                                        'conflict_id': payload['conflict_id']}
                         send_r2_message(self._db, Team.RADAR, 'change_position',
                                         'Unsafe Separation', instruction)

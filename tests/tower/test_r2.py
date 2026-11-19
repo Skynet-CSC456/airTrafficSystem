@@ -279,6 +279,8 @@ def test_corrective_target_checks_other_tracks_and_wraps_at_pole(system):
     run_cycle(db, tower)
     order, = messages(db, Team.RADAR, 'change_position')
     assert order.metadata['aircraft_id'] == 'B'
+    assert order.metadata['aircraft_ids'] == ['A', 'B']
+    assert order.metadata['observed_position'] == {'latitude': 89, 'longitude': -179}
     assert order.metadata['observed_at'] == store.get('B').timestamp
     assert store.get('B').latitude == 89
     run_cycle(db, tower)
