@@ -128,7 +128,7 @@ class OccupancyTowerService(TowerService):
             self._transition = None
 
 
-def process_requests_with_occupancy(db, *, limit=100):
+def process_requests_with_occupancy(db, *, limit=100, service_factory=OccupancyTowerService):
     """Extend owned departures, then run the unchanged real message processor.
 
     Same version-1 protocol, including independent Radar producers without API
@@ -138,7 +138,7 @@ def process_requests_with_occupancy(db, *, limit=100):
     """
     if isinstance(limit,bool) or not isinstance(limit,int) or limit<1:
         return process_requests(db,limit=limit)  # delegate the original error
-    tower = OccupancyTowerService(db)
+    tower = service_factory(db)
     messages = db.receive_messages(Team.TOWER,sender=Team.RADAR,message_type='runway_request',limit=10000)
     processed = {row[0] for row in db.connection.execute('SELECT message_id FROM tower_processed_messages')}
     selected = {m.id for m in messages if m.id not in processed}
@@ -166,4 +166,4 @@ def process_requests_with_occupancy(db, *, limit=100):
             continue
     # A producer can append after preparation. Acknowledge only this bounded
     # snapshot, so the unchanged allocator never sees an unprepared new request.
-    return process_requests(db,limit=len(selected)) if selected else []
+    return process_requests(db,limit=len(selected),service_factory=lambda _: tower) if selected else []

@@ -20,3 +20,6 @@
 | REQ-TWR-007 | Tower | Authoritative Airport and runway CRUD | src/tower/airport.py | tests/tower/test_airport.py; tests/tower/test_service.py | N/A |
 | REQ-TWR-008 | Tower | Atomic request lifecycle and persistent FIFO | src/tower/service.py | tests/tower/test_service.py | N/A |
 | REQ-TWR-009 | Tower | Versioned Radar request processing and atomic responses | src/tower/messaging.py | tests/tower/test_service.py | N/A |
+| REQ-TWR-010 | Tower | R2 nonemergency queue prioritization and resolution | src/tower/r2.py | tests/tower/test_r2.py | 1, 2 or 3 positions |
+| REQ-TWR-011 | Tower | R2 classroom separation detection and correlated Command alerts | src/tower/r2.py | tests/tower/test_r2.py | 10 degrees on either axis |
+| REQ-TWR-012 | Tower | R2 earliest runway release after assignment | src/tower/r2.py | tests/tower/test_r2.py | 30 seconds |

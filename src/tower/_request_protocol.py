@@ -4,6 +4,8 @@ from datetime import datetime, timezone
 
 from src.db import Team
 
+R2_INPUT_TYPES = ('conflict', 'operation_finished', 'unsafe_separation_resolved')
+
 
 def parse_request_metadata(metadata):
     """Check the wire envelope before the service validates operational fields."""
@@ -35,3 +37,29 @@ def publish_decision(db, decision, *, legacy):
         metadata["function"] = "assign_runway"
     content = f"{decision['operation']} {outcome}: {decision['aircraft_id']}"
     return send_to_clients(db, content, message_type=message_type, metadata=metadata)
+
+
+def parse_r2_event(message):
+    """Decode the proposed Radar-to-Tower R2 wire contract."""
+    metadata = parse_request_metadata(message.metadata)
+    common = ('event_id', 'timestamp', 'schema_version')
+    fields = {
+        'conflict': ('request_id', 'aircraft_id', 'reason', 'emergency'),
+        'operation_finished': ('request_id', 'aircraft_id', 'operation'),
+        'unsafe_separation_resolved': ('conflict_id',),
+    }[message.message_type]
+    if metadata.keys() != set(common + fields):
+        raise ValueError('R2 event has missing or unexpected fields')
+    for field in fields + ('event_id',):
+        if field != 'emergency':
+            value = metadata[field]
+            if not isinstance(value, str) or not value.strip() or value != value.strip():
+                raise ValueError(f'Invalid R2 field {field}')
+    if message.message_type == 'conflict' and metadata['emergency'] is not False:
+        raise ValueError('R2 conflict must be explicitly nonemergency')
+    return {**metadata, 'type': message.message_type}
+
+
+def send_r2_message(db, recipient, message_type, content, payload):
+    return db.send_message(Team.TOWER, recipient, content, message_type=message_type,
+                           metadata={'schema_version': 1, **payload})
