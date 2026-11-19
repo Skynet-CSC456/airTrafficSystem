@@ -6,6 +6,7 @@ from src.tower.messaging import (
     list_airborne_aircraft,
     load_runways,
 )
+from src.tower.sequencing import PRIORITY_STEPS, TrafficSequencer
 
 MAX_MESSAGES = 10_000
 
@@ -87,10 +88,18 @@ def send_messages(db, team):
     if team == Team.TOWER:
         kind = choose_option(
             "What do you want to send? ",
-            ["Text message", "Function: assign runway to an airplane"],
+            ["Text message", "Function: assign runway to an airplane", "Function: request landing (FIFO queue)"],
         )
         if kind == 1:
             assign_runway_function(db)
+            return
+        if kind == 2:
+            aircraft_id = input("Aircraft ID: ").strip()
+            try:
+                state = TrafficSequencer(db).request_landing(aircraft_id)
+                print("Landing queue:", ", ".join(state["queue"]))
+            except ValueError as error:
+                print(f"Could not queue aircraft: {error}")
             return
 
     recipient = choose_team(
@@ -171,11 +180,18 @@ def main():
         team = choose_team("What team are you? (radar/tower/command): ")
 
         while True:
+            if team == Team.TOWER:
+                sequencing = TrafficSequencer(db)
+                sequencing.process_radar_messages()
+                state = sequencing.refresh()
+                print("Landing queue:", ", ".join(state["queue"]) or "empty")
             unread = count_unread(db, team)
 
             print(f"\n--- {team.value.upper()} ---")
             print("1. Send messages")
             print(f"2. Read messages ({unread})")
+            if team == Team.RADAR:
+                print("3. Send non-emergency traffic conflict")
             print("q. Quit")
 
             choice = input("Select an option: ").strip().lower()
@@ -184,6 +200,14 @@ def main():
                 send_messages(db, team)
             elif choice == "2":
                 read_messages(db, team)
+            elif choice == "3" and team == Team.RADAR:
+                aircraft_id = input("Aircraft ID: ").strip()
+                reasons = list(PRIORITY_STEPS)
+                reason = reasons[choose_option("Conflict reason: ", reasons)]
+                db.send_message(Team.RADAR, Team.TOWER, "Conflict", message_type="function",
+                                metadata={"function": "traffic_conflict", "aircraft_id": aircraft_id,
+                                          "reason": reason, "emergency": False})
+                print("Conflict sent to Tower.")
             elif choice in ("q", "quit"):
                 break
             else:

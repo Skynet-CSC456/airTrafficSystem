@@ -44,6 +44,7 @@ class AircraftStore:
     """Uses the shared SQLite connection; stores only the latest aircraft state."""
 
     def __init__(self, db: MessageDatabase):
+        self.db = db
         self.connection = db.connection
         with self.connection:
             self.connection.execute("""

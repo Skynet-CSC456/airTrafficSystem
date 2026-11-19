@@ -66,3 +66,28 @@ addressed aircraft/Tower messages. `src/radar/position_update.py` validates comp
 state payloads and applies only newer updates to registered aircraft. The local
 prototype calls Radar directly; it does not yet provide a network API or broker.
 Deleting an aircraft also deletes its aircraft-specific messages.
+
+## R2 traffic sequencing
+
+Run `python messaging_demo.py` and choose Tower. Under **Send messages**, choose
+**Function: request landing (FIFO queue)** and enter a registered airborne aircraft
+ID. Requests persist across restarts. Assign the head aircraft a runway with the
+existing assign-runway function; occupied runways or unresolved separation keep
+aircraft waiting. Successful clearance removes the request and updates positions.
+
+In a Radar session, menu option **3** sends a non-emergency conflict. Two hours
+late advances one position, four hours late advances two, and low fuel advances
+three. Tower processes these messages on each menu cycle, notifies Command of the
+conflict, and sends Radar and Command a resolved message after updating the queue.
+
+Accepted Radar position updates check airborne pairs using the R2 simulation's
+ten-degree latitude-or-longitude separation rule. Unsafe pairs generate a Command
+alert and a Radar position-change instruction. Radar must apply the instruction
+through its normal update path; alerts resolve only on observed safe positions.
+Command's dashboard shows the active pairs and current queue order.
+
+For programmatic use, `src/tower/sequencing.py` provides `TrafficSequencer` with
+`request_landing()`, `process_radar_messages()`, `refresh()`, `snapshot()`, and
+`complete_request()` (for cancellation). See
+[REQ-TWR-007](requirements/tower/REQ-TWR-007-traffic-sequencing.md) for message
+metadata, boundaries, and interpretation of the slides.
