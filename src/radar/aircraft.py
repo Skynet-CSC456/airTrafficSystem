@@ -1,11 +1,13 @@
 """REQ-RAD-004 and REQ-RAD-005: aircraft state storage and shared live-state updates.
+REQ-RAD-006: each aircraft records the runway Tower assigned to it.
+REQ-RAD-008: each aircraft can report its delay and fuel, from which Radar detects conflicts.
 
 Also implements REQ-RAD-001.md, whose internal requirement ID is REQ-RAD-004.
 """
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 import json
 import math
@@ -22,6 +24,9 @@ class AircraftState:
     status: str
     altitude: float  # meters above ground
     timestamp: str  # UTC, YYYY-MM-DDTHH:MM:SS
+    runway_id: str | None = None  # runway assigned by Tower, if any
+    delay_hours: float | None = None  # hours behind schedule; None = not reported
+    fuel_percent: float | None = None  # fuel left, 0-100; None = not reported
 
     def __post_init__(self):
         if not isinstance(self.id, str) or not self.id.strip():
@@ -38,12 +43,19 @@ class AircraftState:
         if not isinstance(self.timestamp, str) or not re.fullmatch(r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}", self.timestamp):
             raise ValueError("Timestamp must be UTC YYYY-MM-DDTHH:MM:SS")
         datetime.strptime(self.timestamp, "%Y-%m-%dT%H:%M:%S")
+        if self.runway_id is not None and (not isinstance(self.runway_id, str) or not self.runway_id.strip()):
+            raise ValueError("Runway ID must be a nonempty string or None")
+        for name, lower, upper in (("delay_hours", 0, math.inf), ("fuel_percent", 0, 100)):
+            value = getattr(self, name)
+            if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or not lower <= value <= upper):
+                raise ValueError(f"Invalid {name}: {value!r}")
 
 
 class AircraftStore:
     """Uses the shared SQLite connection; stores only the latest aircraft state."""
 
     def __init__(self, db: MessageDatabase):
+        self.db = db
         self.connection = db.connection
         with self.connection:
             self.connection.execute("""
@@ -53,9 +65,17 @@ class AircraftStore:
                     longitude REAL NOT NULL CHECK(longitude BETWEEN -180 AND 180),
                     status TEXT NOT NULL CHECK(status IN ('Parked','Departing','Landing','Airborne')),
                     altitude REAL NOT NULL CHECK(altitude >= 0),
-                    timestamp TEXT NOT NULL
+                    timestamp TEXT NOT NULL,
+                    runway_id TEXT NULL,
+                    delay_hours REAL NULL CHECK(delay_hours >= 0),
+                    fuel_percent REAL NULL CHECK(fuel_percent BETWEEN 0 AND 100)
                 )
             """)
+            # Databases created before REQ-RAD-006 / REQ-RAD-008 lack these columns; add them in place.
+            columns = {row["name"] for row in self.connection.execute("PRAGMA table_info(aircraft)")}
+            for column in ("runway_id TEXT NULL", "delay_hours REAL NULL", "fuel_percent REAL NULL"):
+                if column.split()[0] not in columns:
+                    self.connection.execute(f"ALTER TABLE aircraft ADD COLUMN {column}")
             self.connection.execute("""
                 CREATE TABLE IF NOT EXISTS aircraft_messages (
                     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -75,6 +95,9 @@ class AircraftStore:
             'status': state.status,
             'altitude': state.altitude,
             'timestamp': state.timestamp,
+            'runway_id': state.runway_id,
+            'delay_hours': state.delay_hours,
+            'fuel_percent': state.fuel_percent,
             'fresh': True,
         }
         self.connection.execute(
@@ -92,7 +115,7 @@ class AircraftStore:
     def create(self, state: AircraftState) -> AircraftState:
         with self.connection:
             self.connection.execute(
-                "INSERT INTO aircraft (id, latitude, longitude, status, altitude, timestamp) VALUES (?, ?, ?, ?, ?, ?)",
+                "INSERT INTO aircraft (id, latitude, longitude, status, altitude, timestamp, runway_id, delay_hours, fuel_percent) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
                 tuple(asdict(state).values()),
             )
             self._save_shared_state(state)
@@ -106,18 +129,34 @@ class AircraftStore:
         return [AircraftState(**dict(row)) for row in self.connection.execute("SELECT * FROM aircraft ORDER BY id")]
 
     def update(self, state: AircraftState) -> bool:
-        """Return False for stale/duplicate updates; unknown IDs raise KeyError."""
+        """Return False for stale/duplicate updates; unknown IDs raise KeyError.
+
+        Position updates never change the assigned runway; use assign_runway for that.
+        A delay or fuel of None means "not reported" and keeps the stored value.
+        """
         with self.connection:
             if self.get(state.id) is None:
                 raise KeyError(state.id)
             cursor = self.connection.execute("""
-                UPDATE aircraft SET latitude=?, longitude=?, status=?, altitude=?, timestamp=?
+                UPDATE aircraft SET latitude=?, longitude=?, status=?, altitude=?, timestamp=?,
+                    delay_hours=COALESCE(?, delay_hours), fuel_percent=COALESCE(?, fuel_percent)
                 WHERE id=? AND timestamp < ?
             """, (state.latitude, state.longitude, state.status, state.altitude,
-                  state.timestamp, state.id, state.timestamp))
+                  state.timestamp, state.delay_hours, state.fuel_percent, state.id, state.timestamp))
             if cursor.rowcount == 1:
-                self._save_shared_state(state)
+                self._save_shared_state(self.get(state.id))
         return cursor.rowcount == 1
+
+    def assign_runway(self, aircraft_id: str, runway_id: str | None) -> AircraftState:
+        """REQ-RAD-006: record the runway Tower assigned (None clears it); unknown IDs raise KeyError."""
+        with self.connection:
+            current = self.get(aircraft_id)
+            if current is None:
+                raise KeyError(aircraft_id)
+            updated = replace(current, runway_id=runway_id)  # validates runway_id
+            self.connection.execute("UPDATE aircraft SET runway_id=? WHERE id=?", (runway_id, aircraft_id))
+            self._save_shared_state(updated)
+        return updated
 
     def delete(self, aircraft_id: str) -> bool:
         with self.connection:
