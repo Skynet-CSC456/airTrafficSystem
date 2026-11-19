@@ -16,4 +16,5 @@
 | REQ-RAD-005 | Radar   | Shared live state updates for real-time radar tracking | src/db.py and src/radar/aircraft.py         | tests/radar/test_shared_state.py               | N/A     |
 | REQ-TWR-005 | Tower   | Safe runway assignment and landing clearance          | src/tower/clearance.py                       | tests/tower/test_clearance_safety.py            | N/A     |
 | REQ-TWR-006 | Tower   | Assign runway to airborne aircraft via function message | src/tower/messaging.py:assign_runway_to_aircraft | tests/tower/test_assign_runway.py          | N/A     |
+| REQ-TWR-007 | Tower   | R2 FIFO traffic sequencing, priority conflicts, and separation | src/tower/sequencing.py | tests/tower/test_sequencing.py | N/A |
 | REQ-CMD-004 | Command | Unified dashboard with normal/degraded system state   | src/command/dashboard.py                     | tests/command/test_dashboard.py                | N/A     |

@@ -132,7 +132,29 @@ def evaluate_runway_decision(runways: Sequence[Mapping[str, object]], aircraft: 
 
 def publish_runway_decision(db, aircraft, runways, *, runway_id=None, queue_position=None):
     """Persist a safe runway decision to the shared dashboard state."""
+    # REQ-TWR-007: enrolled requests use the same order and separation guard
+    # as the messaging assignment path, even when a runway is available.
+    traffic = db.get_shared_state("tower_traffic")
+    sequencing = None
+    if traffic and aircraft.get("id") in traffic["payload"]["queue"]:
+        from src.tower.sequencing import TrafficSequencer
+
+        sequencing = TrafficSequencer(db)
+        queue_position = traffic["payload"]["queue"].index(aircraft["id"]) + 1
+        try:
+            sequencing.check_clearance(aircraft["id"])
+        except ValueError as error:
+            decision = {
+                "aircraft_id": aircraft["id"], "status": "queued", "safe": False,
+                "runway_id": None, "occupied_until": None,
+                "queue_position": queue_position, "sequenced": True,
+                "message": str(error),
+            }
+            db.upsert_shared_state(f"decision:{aircraft['id']}", decision, category="decision")
+            return decision
     decision = evaluate_runway_decision(runways, aircraft, runway_id=runway_id, queue_position=queue_position)
+    if sequencing is not None:
+        decision["sequenced"] = True
     if getattr(db, "upsert_shared_state", None) is None:
         raise TypeError("Database must expose upsert_shared_state() for shared-state decisions")
     db.upsert_shared_state(f"decision:{aircraft.get('id')}", decision, category="decision")
@@ -147,4 +169,6 @@ def publish_runway_decision(db, aircraft, runways, *, runway_id=None, queue_posi
                 }
                 db.upsert_shared_state(f"runway:{runway.get('id')}", runway_payload, category="runway")
                 break
+    if sequencing is not None and decision["status"] == "cleared":
+        sequencing.complete_request(aircraft["id"])
     return decision

@@ -11,6 +11,7 @@ from dataclasses import asdict
 from src.db import Message, MessageDatabase, Team
 from src.radar.aircraft import AircraftState, AircraftStore
 from src.tower.clearance import assign_runway, update_runway_availability
+from src.tower.sequencing import TrafficSequencer
 
 FUNCTION_MESSAGE_TYPE = "function"
 ASSIGN_RUNWAY_FUNCTION = "assign_runway"
@@ -72,6 +73,8 @@ def assign_runway_to_aircraft(
     if aircraft.altitude <= 0:
         raise ValueError(f"Aircraft {aircraft_id!r} is not in the air")
 
+    sequencing = TrafficSequencer(db)
+    sequencing.check_clearance(aircraft_id)
     runways = load_runways(db)
     decision = assign_runway(runways, asdict(aircraft), runway_id=runway_id)
     decision["queue_position"] = None
@@ -97,4 +100,5 @@ def assign_runway_to_aircraft(
         )
         for recipient in (Team.RADAR, Team.COMMAND)
     }
+    sequencing.complete_request(aircraft_id)
     return decision

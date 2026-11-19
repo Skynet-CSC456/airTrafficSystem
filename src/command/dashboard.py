@@ -20,6 +20,8 @@ def system_status_for_snapshot(snapshot: dict[str, Any]) -> str:
     runways = snapshot.get("runways", [])
     decisions = snapshot.get("decisions", [])
     queue = snapshot.get("landing_queue", [])
+    if snapshot.get("unsafe_pairs"):
+        return "degraded"
     if not aircraft and not runways and not decisions and not queue:
         return "normal"
     degraded = False
@@ -109,6 +111,12 @@ def build_dashboard_snapshot(db: MessageDatabase) -> dict[str, Any]:
     decisions = [row["payload"] for row in shared if row["key"].startswith("decision:")]
     requests = [row["payload"] for row in shared if row["key"].startswith("request:")]
     display_decisions = decisions + requests
+    traffic = (db.get_shared_state("tower_traffic") or {}).get("payload", {})
+    unsafe_pairs = traffic.get("unsafe_pairs", [])
+    display_decisions += [
+        {"status": "degraded", "message": f"Unsafe Separation: {first} / {second}"}
+        for first, second in unsafe_pairs
+    ]
     landing_queue = [
         {
             "aircraft_id": decision.get("aircraft_id"),
@@ -126,6 +134,8 @@ def build_dashboard_snapshot(db: MessageDatabase) -> dict[str, Any]:
         "runways": runways,
         "decisions": display_decisions,
         "landing_queue": sorted(landing_queue, key=lambda item: (item.get("queue_position") is None, item.get("queue_position") or 999)),
+        # REQ-TWR-007: active alerts remain degraded until observed resolution.
+        "unsafe_pairs": unsafe_pairs,
     }
     snapshot["system_status"] = system_status_for_snapshot(snapshot)
     db.upsert_shared_state("command_snapshot", snapshot, category="dashboard")
