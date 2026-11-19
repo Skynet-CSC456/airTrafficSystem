@@ -58,4 +58,5 @@ do not enroll in the R2 queue retain their existing direct clearance behavior.
 
 - Source: src/tower/sequencing.py, src/tower/messaging.py, src/tower/clearance.py,
   src/radar/position_update.py, src/command/dashboard.py, messaging_demo.py
+  and tower_assign_runway.py
 - Tests: tests/tower/test_sequencing.py

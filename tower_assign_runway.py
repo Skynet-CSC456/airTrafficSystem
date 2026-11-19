@@ -7,6 +7,7 @@ from datetime import datetime, timedelta, timezone
 from src.db import Team, create_database
 from src.radar.aircraft import AircraftState, AircraftStore
 from src.tower.clearance import publish_runway_decision
+from src.tower.sequencing import TrafficSequencer
 
 
 DEFAULT_RUNWAYS = [
@@ -65,6 +66,7 @@ def _write_aircraft_state(db, aircraft_id: str, *, latitude: float, longitude: f
         timestamp=next_timestamp.strftime("%Y-%m-%dT%H:%M:%S"),
     )
     store.update(updated_state)
+    TrafficSequencer(db).refresh()
     db.upsert_shared_state(
         f"aircraft:{aircraft_id}",
         {
@@ -225,7 +227,9 @@ def assign_manual_runway(
 
     if request_type == "departure":
         aircraft = {"id": aircraft_id, "status": "Departing"}
-        publish_runway_decision(db, aircraft, runways, runway_id=runway_id)
+        decision = publish_runway_decision(db, aircraft, runways, runway_id=runway_id)
+        if decision["status"] != "cleared":
+            raise ValueError("No safe runway is available for departure")
         update_aircraft_on_departure_runway(db, aircraft_id, runway_id, altitude)
         if departure_deadlines is not None:
             departure_deadlines[aircraft_id] = (time.time() + 3.0, altitude)
@@ -234,8 +238,12 @@ def assign_manual_runway(
             f"Assigned altitude {altitude}m. Status is Airborne."
         )
     else:
+        # REQ-TWR-007: manual assignments also enroll in the persistent queue.
+        TrafficSequencer(db).request_landing(aircraft_id)
         aircraft = {"id": aircraft_id, "status": "Landing"}
-        publish_runway_decision(db, aircraft, runways, runway_id=runway_id)
+        decision = publish_runway_decision(db, aircraft, runways, runway_id=runway_id)
+        if decision["status"] != "cleared":
+            raise ValueError(decision.get("message", "Aircraft is queued waiting for a safe runway"))
         update_aircraft_on_runway(db, aircraft_id, runway_id)
         if landing_deadlines is not None:
             landing_deadlines[aircraft_id] = time.time() + 3.0
@@ -254,6 +262,12 @@ def handle_message(db, message_text: str, pending_requests=None, landing_deadlin
         return
 
     aircraft_id = extract_aircraft_id(message_text)
+    if request_type == "landing":
+        try:
+            TrafficSequencer(db).request_landing(aircraft_id)
+        except ValueError as error:
+            print(f"Tower rejected landing request: {error}")
+            return
     if pending_requests is not None:
         pending_requests[aircraft_id] = {
             "type": request_type,
@@ -281,6 +295,12 @@ def main():
             for message in messages:
                 print(f"Tower received: {message.content}")
                 handle_message(db, message.content, pending_requests, landing_deadlines)
+
+            sequencing = TrafficSequencer(db)
+            sequencing.process_radar_messages()
+            traffic = sequencing.refresh()
+            if traffic["queue"]:
+                print("Landing queue:", ", ".join(traffic["queue"]))
 
             for aircraft_id, deadline in list(landing_deadlines.items()):
                 if time.time() >= deadline:

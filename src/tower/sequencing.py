@@ -123,7 +123,7 @@ class TrafficSequencer:
                 if not isinstance(metadata, dict):
                     continue
                 function = metadata.get("function")
-                if function not in {"landing_request", "traffic_conflict"}:
+                if not isinstance(function, str) or function not in {"landing_request", "traffic_conflict"}:
                     continue
                 result = {"source_message_id": row["id"], "aircraft_id": metadata.get("aircraft_id")}
                 try:
@@ -207,6 +207,8 @@ class TrafficSequencer:
         if aircraft_id not in self.snapshot()["queue"]:
             return
         state = self.refresh()
+        if aircraft_id not in state["queue"]:
+            raise ValueError("Aircraft must be registered and airborne for clearance")
         if aircraft_id in state["queue"]:
             if state["queue"][0] != aircraft_id:
                 raise ValueError("Aircraft must wait for its turn in the landing queue")

@@ -5,6 +5,7 @@ from dataclasses import asdict, replace
 import pytest
 
 import messaging_demo
+import tower_assign_runway
 from src.command.dashboard import build_dashboard_snapshot
 from src.db import Team, create_database
 from src.radar.aircraft import AircraftState, AircraftStore
@@ -93,13 +94,15 @@ def test_radar_request_protocol_and_unrelated_inbox_messages(db):
     text_id = db.send_message(Team.RADAR, Team.TOWER, "hello")
     other_id = db.send_message(Team.COMMAND, Team.TOWER, "Conflict", message_type="function",
                                metadata={"function": "traffic_conflict", "reason": "low_fuel", "aircraft_id": "AC4"})
+    malformed_id = db.send_message(Team.RADAR, Team.TOWER, "Malformed function", message_type="function",
+                                   metadata={"function": []})
     db.send_message(Team.RADAR, Team.TOWER, "Request landing", message_type="function",
                     metadata={"function": "landing_request", "aircraft_id": "AC4"})
     db.send_message(Team.RADAR, Team.TOWER, "Bad request", message_type="function",
                     metadata={"function": "landing_request", "aircraft_id": []})
     assert [item["status"] for item in sequencing.process_radar_messages()] == ["resolved", "rejected"]
     assert sequencing.snapshot()["queue"] == ["AC4"]
-    assert [message.id for message in db.receive_messages(Team.TOWER, unread_only=True)] == [text_id, other_id]
+    assert [message.id for message in db.receive_messages(Team.TOWER, unread_only=True)] == [text_id, other_id, malformed_id]
 
 
 def test_fifo_clearance_guard_and_queue_drains_without_gaps(db):
@@ -246,3 +249,34 @@ def test_conflict_failure_rolls_back_messages_order_and_processed_marker(db, mon
     assert db.receive_messages(Team.COMMAND) == []
     monkeypatch.setattr(sequencing, "_emit", original)
     assert sequencing.process_radar_messages()[0]["status"] == "resolved"
+
+
+def test_manual_landing_requests_enroll_in_fifo_and_assignment_cannot_bypass(db):
+    pending = {}
+    tower_assign_runway.handle_message(db, "AC0 requests landing clearance", pending)
+    tower_assign_runway.handle_message(db, "AC1 requests landing clearance", pending)
+    sequencing = TrafficSequencer(db)
+    assert sequencing.snapshot()["queue"] == ["AC0", "AC1"]
+    before = AircraftStore(db).get("AC1")
+    deadlines = {}
+    with pytest.raises(ValueError, match="wait for its turn"):
+        tower_assign_runway.assign_manual_runway(db, "AC1", "RWY 1", landing_deadlines=deadlines)
+    assert AircraftStore(db).get("AC1") == before
+    assert deadlines == {}
+    assert db.receive_messages(Team.RADAR) == []
+    assert db.get_shared_state("runway:RWY 1") is None
+
+
+def test_manual_head_landing_removes_request_only_on_clearance(db):
+    sequencing = TrafficSequencer(db)
+    sequencing.request_landing("AC0")
+    tower_assign_runway.ensure_runways_exist(db)
+    db.upsert_shared_state("runway:RWY 1", {"id": "RWY 1", "available": False}, category="runway")
+    before = AircraftStore(db).get("AC0")
+    with pytest.raises(ValueError, match="waiting for a safe runway"):
+        tower_assign_runway.assign_manual_runway(db, "AC0", "RWY 1")
+    assert AircraftStore(db).get("AC0") == before
+    assert sequencing.snapshot()["queue"] == ["AC0"]
+    tower_assign_runway.assign_manual_runway(db, "AC0", "RWY 2")
+    assert sequencing.snapshot()["queue"] == []
+    assert db.get_shared_state("decision:AC0")["payload"]["status"] == "cleared"

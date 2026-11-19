@@ -86,6 +86,10 @@ alert and a Radar position-change instruction. Radar must apply the instruction
 through its normal update path; alerts resolve only on observed safe positions.
 Command's dashboard shows the active pairs and current queue order.
 
+The manual `python tower_assign_runway.py` workflow also enrolls landing requests
+in this queue, processes Radar conflicts on each command cycle, and keeps the
+aircraft waiting when clearance is queued or separation remains unsafe.
+
 For programmatic use, `src/tower/sequencing.py` provides `TrafficSequencer` with
 `request_landing()`, `process_radar_messages()`, `refresh()`, `snapshot()`, and
 `complete_request()` (for cancellation). See
