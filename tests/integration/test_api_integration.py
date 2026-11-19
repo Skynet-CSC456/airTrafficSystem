@@ -125,6 +125,8 @@ def test_real_http_six_cases_queue_release_r11_and_applied_events(live,monkeypat
     ('POST','/api/aircraft',{'id':'A'},400),
     ('POST','/api/aircraft',dict(id='A',latitude=40,longitude=-73,altitude=-1,status='Landing'),400),
     ('POST','/api/aircraft',dict(id='A',latitude=91,longitude=-73,altitude=1,status='Landing'),400),
+    ('POST','/api/aircraft',dict(id='A',latitude=40.6413,longitude=-73.7781,altitude=0,status='Departing'),400),
+    ('POST','/api/aircraft',dict(id='A',latitude=40.6563,longitude=-73.7781,altitude=500,status='Unknown'),400),
     ('POST','/api/requests',dict(aircraft_id='MISSING',operation='landing'),404),
     ('POST','/api/requests',dict(aircraft_id='A',operation='teleport'),400),
     ('PATCH','/api/aircraft/MISSING',{'altitude':1},404),
@@ -135,6 +137,31 @@ def test_api_validation_errors(live,method,route,body,status):
     request,_,_=live
     actual,result=request(method,route,body)
     assert actual==status and result['error']
+
+
+@pytest.mark.parametrize('latitude', [40.6413, 40.6563], ids=['inside', 'outside'])
+def test_airborne_creation_rejects_zero_altitude_without_side_effects(live, latitude):
+    request, _, path = live
+    code, result = request('POST', '/api/aircraft', dict(
+        id='AIR', latitude=latitude, longitude=-73.7781, altitude=0, status='Airborne',
+    ))
+    assert code == 400
+    assert result == {'error': 'Airborne requires positive altitude'}
+    with closing(create_database(path)) as db:
+        assert AircraftStore(db).get('AIR') is None
+        assert not db.receive_messages(Team.TOWER, sender=Team.RADAR)
+
+
+def test_airborne_creation_preserves_radar_state_and_landing_request(live):
+    request, _, path = live
+    created = add(request, 'AIR', status='Airborne', altitude=500)
+    assert created['status'] == 'Airborne' and created['altitude'] == 500
+    state = eventually(request, lambda s: s['aircraft'][0]['radar_clearance'] is not None)
+    clearance = state['aircraft'][0]['radar_clearance']
+    assert clearance['operation'] == 'landing' and clearance['outcome'] == 'cleared'
+    with closing(create_database(path)) as db:
+        aircraft = AircraftStore(db).get('AIR')
+        assert aircraft.status == 'Airborne' and aircraft.altitude == 500
 
 
 def test_duplicate_aircraft_and_real_rejection_events(live):
