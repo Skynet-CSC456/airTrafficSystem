@@ -9,3 +9,8 @@ data/
 # Virtual environment
 .venv/
 /node_modules
+
+# React Command build/dependencies
+/frontend/command/node_modules/
+/frontend/command/dist/
+*.tsbuildinfo

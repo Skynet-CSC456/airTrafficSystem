@@ -1,0 +1,38 @@
+name: Integrated ATC Verification
+on:
+  pull_request:
+    branches: [main]
+    paths: ['src/**', 'tests/**', 'frontend/**', 'requirements/**', 'scripts/**', 'package*.json', 'pyproject.toml', 'requirements.txt', 'start-command.sh', '.github/workflows/**']
+  push:
+    paths: ['src/**', 'tests/**', 'frontend/**', 'requirements/**', 'scripts/**', 'package*.json', 'pyproject.toml', 'requirements.txt', 'start-command.sh', '.github/workflows/**']
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Python tests
+        run: |
+          python -m pip install pytest
+          python -m pytest
+      - name: Existing TypeScript tests
+        run: |
+          npm ci
+          npm test -- 'tests/**/*.ts'
+      - name: Command frontend tests and build
+        working-directory: frontend/command
+        run: |
+          npm ci
+          npm test
+          npm run build
+      - name: Requirements and whitespace
+        run: |
+          bash scripts/validate-requirements.sh radar
+          bash scripts/validate-requirements.sh tower
+          bash scripts/validate-requirements.sh command
+          git diff --check
